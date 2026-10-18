@@ -92,4 +92,18 @@ class DivisorCuentaTest {
         assertMonto("1000", r.getValue("Ana").total)
         assertMonto("1000", r.getValue("Beto").total)
     }
+
+    @Test
+    fun repartidoEnPartesIguales() {
+        // 21.000 + 10 % = 23.100, entre 3 = 7.700 cada uno, sin importar quién consumió qué
+        val r = DivisorCuenta.dividirIgual(itemsEjemplo, listOf("Ana", "Beto", "Caro"), propinaPct = bd("10"))
+        r.values.forEach { assertMonto("7700", it.total) }
+    }
+
+    @Test
+    fun repartidoCuadraConTotalAunqueNoSeaDivisible() {
+        val r = DivisorCuenta.dividirIgual(listOf(Item("Once", bd("10000"))), listOf("Ana", "Beto", "Caro"), propinaPct = bd("0"))
+        assertMonto("10000", r.values.fold(BigDecimal.ZERO) { a, d -> a + d.total })
+        assertEquals(setOf("3333", "3334"), r.values.map { it.total.toPlainString() }.toSet())
+    }
 }

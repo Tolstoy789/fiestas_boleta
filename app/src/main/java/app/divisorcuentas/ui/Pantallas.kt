@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -23,12 +24,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -37,6 +40,8 @@ import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -53,7 +58,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +68,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import app.divisorcuentas.core.DatosPago
 import app.divisorcuentas.core.Detalle
 import app.divisorcuentas.core.Transferencia
 import java.io.File
@@ -82,15 +90,17 @@ fun dinero(x: BigDecimal, centavos: Boolean): String =
 @Composable
 fun AppDivisor(vm: CuentaViewModel) {
     val titulos = mapOf(
+        Pantalla.INICIO to "Nueva cuenta",
         Pantalla.BOLETA to "1. Boleta",
         Pantalla.ITEMS to "2. Ítems",
         Pantalla.ASIGNAR to "3. Quién consumió qué",
-        Pantalla.RESUMEN to "4. Cuánto paga cada uno",
+        Pantalla.RESUMEN to if (vm.repartido) "3. Cuánto paga cada uno" else "4. Cuánto paga cada uno",
         Pantalla.HISTORIAL to "Historial",
     )
     val atras = when (vm.pantalla) {
-        Pantalla.BOLETA -> null
-        Pantalla.HISTORIAL -> Pantalla.BOLETA
+        Pantalla.INICIO -> null
+        Pantalla.HISTORIAL -> Pantalla.INICIO
+        Pantalla.RESUMEN -> if (vm.repartido) Pantalla.ITEMS else Pantalla.ASIGNAR
         else -> Pantalla.entries[vm.pantalla.ordinal - 1]
     }
     BackHandler(enabled = atras != null) { atras?.let { vm.pantalla = it } }
@@ -122,6 +132,7 @@ fun AppDivisor(vm: CuentaViewModel) {
                 }
             }
             when (vm.pantalla) {
+                Pantalla.INICIO -> PantallaInicio(vm)
                 Pantalla.BOLETA -> PantallaBoleta(vm)
                 Pantalla.ITEMS -> PantallaItems(vm)
                 Pantalla.ASIGNAR -> PantallaAsignar(vm)
@@ -129,6 +140,128 @@ fun AppDivisor(vm: CuentaViewModel) {
                 Pantalla.HISTORIAL -> PantallaHistorial(vm)
             }
         }
+    }
+}
+
+// ---------- 0. Inicio: quiénes y cómo se divide ----------
+
+@Composable
+private fun PantallaInicio(vm: CuentaViewModel) {
+    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("¿Quiénes están?", style = MaterialTheme.typography.titleMedium)
+        EditorParticipantes(vm)
+
+        HorizontalDivider()
+        Text("¿Cómo dividen la cuenta?", style = MaterialTheme.typography.titleMedium)
+        OpcionModo(
+            titulo = "Repartido",
+            detalle = "El total se divide en partes iguales. Rápido, sin asignar ítems.",
+            elegido = vm.repartido,
+        ) { vm.repartido = true }
+        OpcionModo(
+            titulo = "Detallado",
+            detalle = "Cada uno paga lo que consumió, con la propina en proporción.",
+            elegido = !vm.repartido,
+        ) { vm.repartido = false }
+
+        Button(
+            onClick = { vm.pantalla = Pantalla.BOLETA },
+            enabled = vm.participantes.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (vm.participantes.isEmpty()) "Agrega al menos una persona" else "Siguiente: la boleta") }
+        val guardadas = vm.historial.cuentas.size
+        if (guardadas > 0) {
+            OutlinedButton(onClick = { vm.pantalla = Pantalla.HISTORIAL }, Modifier.fillMaxWidth()) {
+                Text("Historial ($guardadas)")
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpcionModo(titulo: String, detalle: String, elegido: Boolean, alElegir: () -> Unit) {
+    Card(
+        Modifier.fillMaxWidth().selectable(selected = elegido, onClick = alElegir, role = Role.RadioButton),
+        colors = CardDefaults.cardColors(containerColor = if (elegido) Boleta.Billete else Boleta.Papel),
+        border = BorderStroke(1.dp, if (elegido) Boleta.Billete else Boleta.Borde),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(
+                selected = elegido, onClick = null,
+                colors = RadioButtonDefaults.colors(selectedColor = Color.White, unselectedColor = Boleta.Grafito),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(titulo, fontWeight = FontWeight.SemiBold, color = if (elegido) Color.White else Boleta.Tinta)
+                Text(
+                    detalle, style = MaterialTheme.typography.bodySmall,
+                    color = if (elegido) Color.White else Boleta.Grafito,
+                )
+            }
+        }
+    }
+}
+
+/** Agregar o quitar personas, cargar un grupo guardado y guardar los actuales como grupo. */
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun EditorParticipantes(vm: CuentaViewModel) {
+    var nuevo by rememberSaveable { mutableStateOf("") }
+    var nombrandoGrupo by rememberSaveable { mutableStateOf(false) }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(nuevo, { nuevo = it }, Modifier.weight(1f), label = { Text("Nombre") }, singleLine = true)
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { vm.agregarParticipante(nuevo); nuevo = "" }, enabled = nuevo.isNotBlank()) { Text("Agregar") }
+        }
+        if (vm.historial.grupos.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text("Grupos:", Modifier.padding(top = 14.dp, end = 4.dp), style = MaterialTheme.typography.bodySmall)
+                vm.historial.grupos.forEach { g ->
+                    AssistChip(onClick = { vm.usarGrupo(g) }, label = { Text("${g.nombre} (${g.miembros.size})") })
+                }
+            }
+        }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            vm.participantes.forEach { p ->
+                InputChip(
+                    selected = false,
+                    onClick = { vm.borrarParticipante(p) },
+                    label = { Text("$p  ✕") },
+                    modifier = Modifier.semantics { contentDescription = "Quitar a $p" },
+                )
+            }
+            if (vm.participantes.size >= 2) {
+                TextButton(onClick = { nombrandoGrupo = true }) { Text("Guardar como grupo") }
+            }
+        }
+    }
+
+    if (nombrandoGrupo) {
+        var nombreGrupo by rememberSaveable { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { nombrandoGrupo = false },
+            title = { Text("Guardar grupo") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(vm.participantes.joinToString(", "), style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        nombreGrupo, { nombreGrupo = it },
+                        label = { Text("Nombre del grupo (ej. La pega)") }, singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { vm.guardarGrupo(nombreGrupo); nombrandoGrupo = false },
+                    enabled = nombreGrupo.isNotBlank(),
+                ) { Text("Guardar") }
+            },
+            dismissButton = { TextButton(onClick = { nombrandoGrupo = false }) { Text("Cancelar") } },
+        )
     }
 }
 
@@ -272,9 +405,9 @@ private fun PantallaItems(vm: CuentaViewModel) {
         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             OutlinedButton(onClick = vm::agregarItem) { Text("Agregar ítem") }
             Button(
-                onClick = { vm.pantalla = Pantalla.ASIGNAR },
+                onClick = vm::despuesDeItems,
                 enabled = vm.items.isNotEmpty() && vm.itemsInvalidos.isEmpty(),
-            ) { Text("Siguiente") }
+            ) { Text(if (vm.repartido) "Calcular" else "Siguiente") }
         }
     }
 }
@@ -284,38 +417,8 @@ private fun PantallaItems(vm: CuentaViewModel) {
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun PantallaAsignar(vm: CuentaViewModel) {
-    var nuevo by rememberSaveable { mutableStateOf("") }
-    var nombrandoGrupo by rememberSaveable { mutableStateOf(false) }
     Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(nuevo, { nuevo = it }, Modifier.weight(1f), label = { Text("Nombre") }, singleLine = true)
-            Spacer(Modifier.width(8.dp))
-            Button(onClick = { vm.agregarParticipante(nuevo); nuevo = "" }, enabled = nuevo.isNotBlank()) { Text("Agregar") }
-        }
-        if (vm.historial.grupos.isNotEmpty()) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text("Grupos:", Modifier.padding(top = 14.dp, end = 4.dp), style = MaterialTheme.typography.bodySmall)
-                vm.historial.grupos.forEach { g ->
-                    AssistChip(onClick = { vm.usarGrupo(g) }, label = { Text("${g.nombre} (${g.miembros.size})") })
-                }
-            }
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            vm.participantes.forEach { p ->
-                InputChip(
-                    selected = false,
-                    onClick = { vm.borrarParticipante(p) },
-                    label = { Text("$p  ✕") },
-                    modifier = Modifier.semantics { contentDescription = "Quitar a $p" },
-                )
-            }
-            if (vm.participantes.size >= 2) {
-                TextButton(onClick = { nombrandoGrupo = true }) { Text("Guardar como grupo") }
-            }
-        }
+        EditorParticipantes(vm)
         Text(
             "Marca quién consumió cada ítem. Si no marcas a nadie, se reparte entre todos. " +
                 "En ítems con varias unidades puedes ajustar cuántas tomó cada uno.",
@@ -350,30 +453,6 @@ private fun PantallaAsignar(vm: CuentaViewModel) {
             enabled = vm.participantes.isNotEmpty(),
             modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         ) { Text("Calcular") }
-    }
-
-    if (nombrandoGrupo) {
-        var nombreGrupo by rememberSaveable { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { nombrandoGrupo = false },
-            title = { Text("Guardar grupo") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(vm.participantes.joinToString(", "), style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(
-                        nombreGrupo, { nombreGrupo = it },
-                        label = { Text("Nombre del grupo") }, singleLine = true,
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { vm.guardarGrupo(nombreGrupo); nombrandoGrupo = false },
-                    enabled = nombreGrupo.isNotBlank(),
-                ) { Text("Guardar") }
-            },
-            dismissButton = { TextButton(onClick = { nombrandoGrupo = false }) { Text("Cancelar") } },
-        )
     }
 }
 
@@ -413,7 +492,13 @@ private fun SelectorUnidades(vm: CuentaViewModel, item: ItemEditable, elegidos: 
 private fun PantallaResumen(vm: CuentaViewModel) {
     val context = LocalContext.current
     val reparto = vm.calcular()
+    var editandoDatos by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            if (vm.repartido) "Repartido: el total en partes iguales" else "Detallado: cada uno paga lo que consumió",
+            style = MaterialTheme.typography.labelLarge,
+            color = Boleta.Billete,
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
                 vm.propinaPct, { vm.propinaPct = it }, Modifier.width(120.dp),
@@ -447,7 +532,7 @@ private fun PantallaResumen(vm: CuentaViewModel) {
             Text("Faltan participantes o hay ítems con precio inválido.")
             return@Column
         }
-        reparto.values.forEach { TarjetaPersona(it, vm.conCentavos) }
+        reparto.values.forEach { TarjetaPersona(it, vm.conCentavos, conItems = !vm.repartido) }
 
         val total = reparto.values.fold(BigDecimal.ZERO) { acc, d -> acc + d.total }
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -470,6 +555,31 @@ private fun PantallaResumen(vm: CuentaViewModel) {
                 Text(dinero(t.monto, vm.conCentavos), style = EstiloMonto.copy(fontSize = 18.sp))
             }
         }
+        val quienPago = vm.pagador
+        val datosPago = quienPago?.let(vm::datosPagoDe)
+        if (quienPago != null) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Datos para depositar a $quienPago", fontWeight = FontWeight.SemiBold)
+                    if (datosPago == null || datosPago.vacio) {
+                        Text(
+                            "Agrégalos y saldrán en el PDF y en el mensaje. Quedan guardados para la próxima.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        datosPago.lineas().forEach { (etiqueta, valor) ->
+                            Row {
+                                Text(etiqueta, Modifier.width(120.dp), style = MaterialTheme.typography.bodySmall, color = Boleta.Grafito)
+                                Text(valor, style = EstiloMonto.copy(fontSize = 14.sp, color = Boleta.Tinta))
+                            }
+                        }
+                    }
+                    TextButton(onClick = { editandoDatos = true }) {
+                        Text(if (datosPago == null || datosPago.vacio) "Agregar datos bancarios" else "Editar datos")
+                    }
+                }
+            }
+        }
 
         HorizontalDivider()
         OutlinedTextField(
@@ -486,7 +596,10 @@ private fun PantallaResumen(vm: CuentaViewModel) {
             ) { Text("PDF") }
             Button(
                 onClick = {
-                    val texto = resumenTexto(reparto, total, transferencias, vm.conCentavos)
+                    val texto = resumenTexto(
+                        reparto, total, transferencias, vm.conCentavos,
+                        datosPago = datosPago?.takeUnless { it.vacio }, repartido = vm.repartido,
+                    )
                     val envio = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, texto)
                     context.startActivity(Intent.createChooser(envio, "Compartir cuenta"))
                 },
@@ -495,6 +608,51 @@ private fun PantallaResumen(vm: CuentaViewModel) {
         }
         Spacer(Modifier.height(16.dp))
     }
+
+    val quien = vm.pagador
+    if (editandoDatos && quien != null) {
+        DialogoDatosPago(
+            persona = quien,
+            inicial = vm.datosPagoDe(quien) ?: DatosPago(titular = quien),
+            alCerrar = { editandoDatos = false },
+            alGuardar = { vm.guardarDatosPago(quien, it); editandoDatos = false },
+        )
+    }
+}
+
+@Composable
+private fun DialogoDatosPago(
+    persona: String,
+    inicial: DatosPago,
+    alCerrar: () -> Unit,
+    alGuardar: (DatosPago) -> Unit,
+) {
+    var datos by remember { mutableStateOf(inicial) }
+    AlertDialog(
+        onDismissRequest = alCerrar,
+        title = { Text("Datos para depositar a $persona") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedTextField(datos.titular, { datos = datos.copy(titular = it) }, label = { Text("Nombre del titular") }, singleLine = true)
+                OutlinedTextField(datos.rut, { datos = datos.copy(rut = it) }, label = { Text("RUT") }, singleLine = true)
+                OutlinedTextField(datos.banco, { datos = datos.copy(banco = it) }, label = { Text("Banco") }, singleLine = true)
+                OutlinedTextField(
+                    datos.tipoCuenta, { datos = datos.copy(tipoCuenta = it) },
+                    label = { Text("Tipo de cuenta (corriente, vista, RUT)") }, singleLine = true,
+                )
+                OutlinedTextField(
+                    datos.numero, { datos = datos.copy(numero = it) }, label = { Text("Número de cuenta") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                )
+                OutlinedTextField(
+                    datos.correo, { datos = datos.copy(correo = it) }, label = { Text("Correo") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { alGuardar(datos) }) { Text("Guardar") } },
+        dismissButton = { TextButton(onClick = alCerrar) { Text("Cancelar") } },
+    )
 }
 
 // ---------- Historial ----------
@@ -546,14 +704,14 @@ private fun PantallaHistorial(vm: CuentaViewModel) {
 }
 
 @Composable
-private fun TarjetaPersona(d: Detalle, centavos: Boolean) {
+private fun TarjetaPersona(d: Detalle, centavos: Boolean, conItems: Boolean) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
             Row {
                 Text(d.nombre, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                 Text(dinero(d.total, centavos), style = EstiloMonto.copy(fontSize = 20.sp))
             }
-            d.items.forEach { (nombre, monto) ->
+            if (conItems) d.items.forEach { (nombre, monto) ->
                 Text("• $nombre: ${dinero(monto, centavos)}", style = MaterialTheme.typography.bodySmall)
             }
             Text(
@@ -581,8 +739,10 @@ private fun resumenTexto(
     total: BigDecimal,
     transferencias: List<Transferencia>,
     centavos: Boolean,
+    datosPago: DatosPago?,
+    repartido: Boolean,
 ) = buildString {
-    appendLine("Cuenta dividida:")
+    appendLine(if (repartido) "Cuenta repartida en partes iguales:" else "Cuenta dividida:")
     reparto.values.forEach { appendLine("• ${it.nombre}: ${dinero(it.total, centavos)}") }
     append("Total: ${dinero(total, centavos)}")
     if (transferencias.isNotEmpty()) {
@@ -591,4 +751,9 @@ private fun resumenTexto(
         appendLine("Transferencias:")
         transferencias.forEach { appendLine("• ${it.de} → ${it.a}: ${dinero(it.monto, centavos)}") }
     }
-}
+    if (datosPago != null && transferencias.isNotEmpty()) {
+        appendLine()
+        appendLine("Datos para depositar a ${transferencias.first().a}:")
+        datosPago.lineas().forEach { (etiqueta, valor) -> appendLine("$etiqueta: $valor") }
+    }
+}.trimEnd()

@@ -11,6 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.divisorcuentas.core.ArchivoHistorial
 import app.divisorcuentas.core.CuentaGuardada
+import app.divisorcuentas.core.DatosPago
 import app.divisorcuentas.core.Detalle
 import app.divisorcuentas.core.DivisorCuenta
 import app.divisorcuentas.core.ExtraccionItems
@@ -39,7 +40,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
-enum class Pantalla { BOLETA, ITEMS, ASIGNAR, RESUMEN, HISTORIAL }
+enum class Pantalla { INICIO, BOLETA, ITEMS, ASIGNAR, RESUMEN, HISTORIAL }
 
 /** Ítem tal como se edita en pantalla (texto libre); se valida al calcular. */
 data class ItemEditable(
@@ -67,7 +68,7 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     private val repositorio = RepositorioHistorial(app)
     private val ids = AtomicLong()
 
-    var pantalla by mutableStateOf(Pantalla.BOLETA)
+    var pantalla by mutableStateOf(Pantalla.INICIO)
     var ocupado by mutableStateOf<String?>(null)
         private set
     var error by mutableStateOf<String?>(null)
@@ -98,6 +99,11 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     var impuestoIncluido by mutableStateOf(true)
     var impuestoPct by mutableStateOf("19")
     var conCentavos by mutableStateOf(false)
+    /**
+     * Modo de cálculo, elegido al inicio: true = "Repartido" (el total en partes
+     * iguales), false = "Detallado" (cada uno paga lo que consumió).
+     */
+    var repartido by mutableStateOf(false)
     /** Quién pagó la cuenta completa; null si aún nadie. */
     var pagador by mutableStateOf<String?>(null)
 
@@ -244,7 +250,7 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         val validos = items.map { it.aItem()!! }
         return runCatching {
             DivisorCuenta.dividirPorPartes(
-                validos, partesPorIndice(), participantes.toList(),
+                validos, partesParaCalcular(), participantes.toList(),
                 propinaPct = Precios.parsear(propinaPct) ?: BigDecimal.ZERO,
                 impuestoPct = Precios.parsear(impuestoPct) ?: BigDecimal.ZERO,
                 impuestoIncluido = impuestoIncluido,
@@ -267,9 +273,11 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
             },
             fecha = ahora,
             items = items.mapNotNull { it.aItem() },
-            partes = partesPorIndice(),
+            partes = partesParaCalcular(),
             participantes = participantes.toList(),
             reparto = reparto,
+            repartido = repartido,
+            datosPago = pagador?.let(::datosPagoDe)?.takeUnless { it.vacio },
             propinaPct = Precios.parsear(propinaPct) ?: BigDecimal.ZERO,
             impuestoPct = if (impuestoIncluido) null else Precios.parsear(impuestoPct) ?: BigDecimal.ZERO,
             pagador = pagador,
@@ -283,6 +291,23 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun partesPorIndice(): Map<Int, Map<String, Int>> =
         items.mapIndexed { i, it -> i to asignaciones[it.id].orEmpty() }.toMap()
+
+    /** En modo Repartido no se mira quién consumió qué: todo entre todos (se conservan las marcas por si se cambia). */
+    private fun partesParaCalcular(): Map<Int, Map<String, Int>> = if (repartido) emptyMap() else partesPorIndice()
+
+    /** Pantalla que sigue a la de ítems: en Repartido no hace falta asignar. */
+    fun despuesDeItems() {
+        pantalla = if (repartido) Pantalla.RESUMEN else Pantalla.ASIGNAR
+    }
+
+    // ---- Datos para depositar ----
+
+    fun datosPagoDe(persona: String): DatosPago? = Historial.datosPagoDe(historial, persona)
+
+    fun guardarDatosPago(persona: String, datos: DatosPago) {
+        actualizarHistorial { Historial.guardarDatosPago(it, persona, datos) }
+        aviso = if (datos.vacio) "Datos de $persona borrados." else "Datos para transferir a $persona guardados."
+    }
 
     // ---- Historial ----
 
@@ -303,6 +328,7 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
             conCentavos = conCentavos,
             pagador = pagador,
             totales = reparto.mapValues { it.value.total.toPlainString() },
+            repartido = repartido,
         )
         cuentaActual = creada
         tituloCuenta = titulo
@@ -322,6 +348,7 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         impuestoIncluido = cuenta.impuestoIncluido
         impuestoPct = cuenta.impuestoPct
         conCentavos = cuenta.conCentavos
+        repartido = cuenta.repartido
         pagador = cuenta.pagador
         tituloCuenta = cuenta.titulo
         cuentaActual = cuenta.creada

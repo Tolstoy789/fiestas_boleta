@@ -28,15 +28,38 @@ data class CuentaGuardada(
     val pagador: String? = null,
     /** Lo que pagó cada uno, ya calculado. */
     val totales: Map<String, String> = emptyMap(),
+    /** true si el total se dividió en partes iguales en vez de por consumo. */
+    val repartido: Boolean = false,
 )
 
 @Serializable
 data class Grupo(val nombre: String, val miembros: List<String>)
 
+/** Datos bancarios para que el resto le deposite a quien pagó la cuenta. */
+@Serializable
+data class DatosPago(
+    val titular: String = "",
+    val rut: String = "",
+    val banco: String = "",
+    val tipoCuenta: String = "",
+    val numero: String = "",
+    val correo: String = "",
+) {
+    val vacio: Boolean get() = lineas().isEmpty()
+
+    /** Etiqueta y valor de cada dato que no esté en blanco, en el orden en que se escriben al transferir. */
+    fun lineas(): List<Pair<String, String>> = listOf(
+        "Nombre" to titular, "RUT" to rut, "Banco" to banco,
+        "Tipo de cuenta" to tipoCuenta, "N° de cuenta" to numero, "Correo" to correo,
+    ).map { (k, v) -> k to v.trim() }.filter { it.second.isNotEmpty() }
+}
+
 @Serializable
 data class ArchivoHistorial(
     val cuentas: List<CuentaGuardada> = emptyList(),
     val grupos: List<Grupo> = emptyList(),
+    /** Persona -> sus datos bancarios, para no escribirlos en cada reunión. */
+    val datosPago: Map<String, DatosPago> = emptyMap(),
 )
 
 object Historial {
@@ -70,4 +93,15 @@ object Historial {
 
     fun borrarGrupo(archivo: ArchivoHistorial, nombre: String): ArchivoHistorial =
         archivo.copy(grupos = archivo.grupos.filterNot { it.nombre == nombre })
+
+    /** Datos bancarios de [persona], sin importar mayúsculas; null si no hay. */
+    fun datosPagoDe(archivo: ArchivoHistorial, persona: String): DatosPago? =
+        archivo.datosPago.entries.firstOrNull { it.key.equals(persona.trim(), ignoreCase = true) }?.value
+
+    /** Guarda (o borra, si vienen vacíos) los datos bancarios de [persona]. */
+    fun guardarDatosPago(archivo: ArchivoHistorial, persona: String, datos: DatosPago): ArchivoHistorial {
+        val nombre = persona.trim()
+        val otros = archivo.datosPago.filterKeys { !it.equals(nombre, ignoreCase = true) }
+        return archivo.copy(datosPago = if (datos.vacio) otros else otros + (nombre to datos))
+    }
 }

@@ -113,6 +113,21 @@ object DivisorCuenta {
         return redondearCuadrando(exactos, unidad).associateBy { it.nombre }
     }
 
+    /**
+     * Modo "Repartido": el total se divide en partes iguales entre todos, sin
+     * mirar quién consumió qué. La propina e impuesto quedan iguales para todos
+     * y el redondeo igual cuadra con el total.
+     */
+    fun dividirIgual(
+        items: List<Item>,
+        participantes: List<String>,
+        propinaPct: BigDecimal = BigDecimal.TEN,
+        impuestoPct: BigDecimal = BigDecimal.ZERO,
+        impuestoIncluido: Boolean = true,
+        unidad: BigDecimal = BigDecimal.ONE,
+    ): Map<String, Detalle> =
+        dividirPorPartes(items, emptyMap(), participantes, propinaPct, impuestoPct, impuestoIncluido, unidad)
+
     private fun redondearCuadrando(detalles: List<Detalle>, unidad: BigDecimal): List<Detalle> {
         fun enUnidades(x: BigDecimal, modo: RoundingMode) =
             x.divide(unidad, MC).setScale(0, modo)

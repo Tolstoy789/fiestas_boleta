@@ -8,6 +8,7 @@ import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import androidx.core.content.res.ResourcesCompat
 import app.divisorcuentas.R
+import app.divisorcuentas.core.DatosPago
 import app.divisorcuentas.core.Detalle
 import app.divisorcuentas.core.Item
 import app.divisorcuentas.core.Transferencia
@@ -30,11 +31,15 @@ data class DatosPdf(
     val partes: Map<Int, Map<String, Int>>,
     val participantes: List<String>,
     val reparto: Map<String, Detalle>,
+    /** Modo Repartido: el total en partes iguales, sin detalle por consumo. */
+    val repartido: Boolean,
     val propinaPct: BigDecimal,
     /** Porcentaje de impuesto sumado aparte; null si ya viene incluido en los precios. */
     val impuestoPct: BigDecimal?,
     val pagador: String?,
     val transferencias: List<Transferencia>,
+    /** Datos bancarios de quien pagó, para que el resto le deposite. */
+    val datosPago: DatosPago?,
     val centavos: Boolean,
 )
 
@@ -115,7 +120,7 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
         encabezado()
         resumenPorPersona()
         quienPaga()
-        detallePorPersona()
+        if (!d.repartido) detallePorPersona()
         boletaCompleta()
         nota()
         cerrarPagina()
@@ -159,7 +164,8 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
         lienzo.drawText(recortar(d.titulo, texto(22f, PAPEL, 600), anchoUtil - 220), x, y + 58, texto(22f, PAPEL, 600))
         val fecha = SimpleDateFormat("EEEE d 'de' MMMM yyyy, HH:mm", locale).format(Date(d.fecha))
         lienzo.drawText(fecha.replaceFirstChar { it.uppercase() }, x, y + 80, texto(10.5f, GRIS_CLARO))
-        lienzo.drawText("${d.participantes.size} personas · ${d.items.size} ítems", x, y + 98, texto(10.5f, GRIS_CLARO))
+        val modo = if (d.repartido) "Repartido en partes iguales" else "Detallado por consumo"
+        lienzo.drawText("${d.participantes.size} personas · ${d.items.size} ítems · $modo", x, y + 98, texto(10.5f, GRIS_CLARO))
 
         val total = d.reparto.values.fold(BigDecimal.ZERO) { a, p -> a + p.total }
         alDerecha("TOTAL A PAGAR", derecha - 20, y + 28, texto(9.5f, CORTE, 600).apply { letterSpacing = 0.12f })
@@ -224,7 +230,9 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
     private fun quienPaga() {
         val quien = d.pagador ?: return
         if (d.transferencias.isEmpty()) return
-        val alto = 44f + d.transferencias.size * 22f
+        val datos = d.datosPago?.lineas().orEmpty()
+        val altoDatos = if (datos.isEmpty()) 0f else 40f + datos.size * 18f
+        val alto = 44f + d.transferencias.size * 22f + altoDatos
         asegurar(alto)
         lienzo.drawRoundRect(RectF(MARGEN, y, derecha, y + alto), 10f, 10f, relleno(VERDE_CLARO))
         lienzo.drawText("Para quedar a mano: $quien pagó la cuenta", MARGEN + 16, y + 24, texto(12.5f, BILLETE, 600))
@@ -233,6 +241,18 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
             lienzo.drawText("${t.de} le transfiere a ${t.a}", MARGEN + 16, fy, texto(11.5f))
             alDerecha(plata(t.monto), derecha - 16, fy, texto(12f, TINTA, tipo = monoFuerte))
             fy += 22
+        }
+        if (datos.isNotEmpty()) {
+            // Datos bancarios en un recuadro blanco, para copiarlos tal cual en la app del banco
+            val caja = RectF(MARGEN + 12, fy - 6, derecha - 12, fy - 6 + altoDatos - 8)
+            lienzo.drawRoundRect(caja, 8f, 8f, relleno(0xFFFFFFFF.toInt()))
+            lienzo.drawText("Datos para depositar a $quien", MARGEN + 26, fy + 14, texto(10.5f, TINTA, 600))
+            var dy = fy + 34
+            datos.forEach { (etiqueta, valor) ->
+                lienzo.drawText(etiqueta, MARGEN + 26, dy, texto(10f, GRAFITO))
+                lienzo.drawText(recortar(valor, texto(11f, TINTA, tipo = mono), anchoUtil - 170), MARGEN + 136, dy, texto(11f, TINTA, tipo = mono))
+                dy += 18
+            }
         }
         y += alto + 24
     }

@@ -42,4 +42,20 @@ class HistorialTest {
         a = Historial.guardarGrupo(a, Grupo("pega ", listOf("Ana", " Beto", "Ana")))
         assertEquals(listOf(Grupo("pega", listOf("Ana", "Beto"))), a.grupos)
     }
+
+    @Test
+    fun cuentasAntiguasSinModoSonDetalladas() {
+        val viejo = """{"cuentas":[{"creada":1,"titulo":"x","items":[],"participantes":["Ana"]}],"grupos":[]}"""
+        assertEquals(false, Historial.desdeJson(viejo).cuentas.single().repartido)
+    }
+
+    @Test
+    fun datosPagoSeGuardanYSeBuscanSinMayusculas() {
+        val datos = DatosPago(titular = "Elias Pérez", banco = "BancoEstado", tipoCuenta = "Cuenta RUT", numero = "12345678")
+        var a = Historial.guardarDatosPago(ArchivoHistorial(), "Elias", datos)
+        assertEquals(datos, Historial.datosPagoDe(Historial.desdeJson(Historial.aJson(a)), "elias "))
+        assertEquals(listOf("Nombre", "Banco", "Tipo de cuenta", "N° de cuenta"), datos.lineas().map { it.first })
+        a = Historial.guardarDatosPago(a, "ELIAS", DatosPago())
+        assertEquals(null, Historial.datosPagoDe(a, "Elias"))
+    }
 }
