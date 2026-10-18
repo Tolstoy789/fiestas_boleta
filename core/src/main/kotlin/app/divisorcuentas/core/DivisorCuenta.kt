@@ -63,9 +63,28 @@ object DivisorCuenta {
         impuestoPct: BigDecimal = BigDecimal.ZERO,
         impuestoIncluido: Boolean = true,
         unidad: BigDecimal = BigDecimal.ONE,
+    ): Map<String, Detalle> = dividirPorPartes(
+        items,
+        asignaciones.mapValues { (_, quienes) -> quienes.associateWith { 1 } },
+        participantes, propinaPct, impuestoPct, impuestoIncluido, unidad,
+    )
+
+    /**
+     * Igual que [dividir], pero cada participante de un ítem lleva un peso: las
+     * unidades que consumió. Con 3 cervezas y `{"Beto": 2, "Ana": 1}`, Beto paga
+     * dos tercios. Un ítem sin asignar se reparte en partes iguales entre todos.
+     */
+    fun dividirPorPartes(
+        items: List<Item>,
+        partes: Map<Int, Map<String, Int>>,
+        participantes: List<String>,
+        propinaPct: BigDecimal = BigDecimal.TEN,
+        impuestoPct: BigDecimal = BigDecimal.ZERO,
+        impuestoIncluido: Boolean = true,
+        unidad: BigDecimal = BigDecimal.ONE,
     ): Map<String, Detalle> {
         require(participantes.isNotEmpty()) { "Debe haber al menos un participante." }
-        val desconocidos = asignaciones.values.flatten().toSet() - participantes.toSet()
+        val desconocidos = partes.values.flatMap { it.keys }.toSet() - participantes.toSet()
         require(desconocidos.isEmpty()) { "Participantes no registrados: ${desconocidos.sorted()}" }
 
         val impuesto = if (impuestoIncluido) BigDecimal.ZERO else impuestoPct
@@ -73,9 +92,12 @@ object DivisorCuenta {
         // 1. Subtotales exactos (sin redondear todavía).
         val consumos = participantes.associateWith { mutableListOf<Pair<String, BigDecimal>>() }
         items.forEachIndexed { i, item ->
-            val quienes = asignaciones[i].orEmpty().ifEmpty { participantes }
-            val parte = item.total.divide(quienes.size.toBigDecimal(), MC)
-            quienes.forEach { consumos.getValue(it).add(item.nombre to parte) }
+            val pesos = partes[i].orEmpty().filterValues { it > 0 }.ifEmpty { participantes.associateWith { 1 } }
+            val totalPesos = pesos.values.sum().toBigDecimal()
+            pesos.forEach { (p, peso) ->
+                val parte = item.total * peso.toBigDecimal().divide(totalPesos, MC)
+                consumos.getValue(p).add(item.nombre to parte)
+            }
         }
 
         // 2. Propina e impuesto proporcionales al subtotal.

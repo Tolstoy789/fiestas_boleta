@@ -67,4 +67,29 @@ class DivisorCuentaTest {
             DivisorCuenta.dividir(itemsEjemplo, mapOf(0 to listOf("Zoe")), listOf("Ana"))
         }
     }
+
+    @Test
+    fun repartoPorUnidades() {
+        // 3 cervezas a 3.000: Beto tomó 2 y Ana 1
+        val r = DivisorCuenta.dividirPorPartes(
+            listOf(Item("Cerveza", bd("3000"), cantidad = 3)),
+            mapOf(0 to mapOf("Beto" to 2, "Ana" to 1)),
+            listOf("Ana", "Beto"),
+            propinaPct = BigDecimal.ZERO,
+        )
+        assertMonto("3000", r.getValue("Ana").total)
+        assertMonto("6000", r.getValue("Beto").total)
+    }
+
+    @Test
+    fun pesosEnCeroSeIgnoran() {
+        val r = DivisorCuenta.dividirPorPartes(
+            listOf(Item("Pan", bd("2000"))),
+            mapOf(0 to mapOf("Ana" to 0)),
+            listOf("Ana", "Beto"),
+            propinaPct = BigDecimal.ZERO,
+        )
+        assertMonto("1000", r.getValue("Ana").total)
+        assertMonto("1000", r.getValue("Beto").total)
+    }
 }

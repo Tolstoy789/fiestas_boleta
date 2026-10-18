@@ -62,6 +62,20 @@ object ExtraccionItems {
             Item(nombre.trim(), totalLinea.divide(cantidad.toBigDecimal(), java.math.MathContext.DECIMAL64), cantidad)
         }
 
+    // "TOTAL  21.000", "Total a pagar: $21.000"; no "SUBTOTAL" ni "TOTAL IVA"
+    private val LINEA_TOTAL = Regex(
+        """^\s*total\b(?!\s*(iva|neto|impuesto))[^\d]*(\d[\d.,]*)\s*$""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * El total impreso en la boleta, si se puede leer. Si hay varias líneas TOTAL
+     * se toma la última, que suele ser la final (con propina o descuentos).
+     */
+    fun totalImpreso(textoBoleta: String): BigDecimal? =
+        textoBoleta.lines().mapNotNull { LINEA_TOTAL.matchEntire(it)?.groupValues?.get(2) }
+            .lastOrNull()?.let(Precios::parsear)
+
     /** Usa el JSON del modelo; si no trae ítems, cae al respaldo por texto. */
     fun extraer(respuestaModelo: String?, textoBoleta: String): List<Item> =
         respuestaModelo?.let(::desdeJson)?.takeIf { it.isNotEmpty() } ?: desdeTexto(textoBoleta)
