@@ -1,7 +1,8 @@
-// Módulo de lógica pura (sin Android): cálculo del reparto y, más adelante,
-// el parseo de la respuesta del modelo. Se prueba con JUnit en la JVM.
+// Módulo de lógica pura (sin Android): reparto, saldos, lectura de la respuesta
+// del modelo y formato del historial. Se prueba con JUnit en la JVM.
 plugins {
     id("org.jetbrains.kotlin.jvm")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 java {
@@ -16,6 +17,7 @@ kotlin {
 }
 
 dependencies {
+    api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     testImplementation(kotlin("test"))
 }
 

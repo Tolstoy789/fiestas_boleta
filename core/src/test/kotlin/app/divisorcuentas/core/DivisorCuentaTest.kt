@@ -67,4 +67,43 @@ class DivisorCuentaTest {
             DivisorCuenta.dividir(itemsEjemplo, mapOf(0 to listOf("Zoe")), listOf("Ana"))
         }
     }
+
+    @Test
+    fun repartoPorUnidades() {
+        // 3 cervezas a 3.000: Beto tomó 2 y Ana 1
+        val r = DivisorCuenta.dividirPorPartes(
+            listOf(Item("Cerveza", bd("3000"), cantidad = 3)),
+            mapOf(0 to mapOf("Beto" to 2, "Ana" to 1)),
+            listOf("Ana", "Beto"),
+            propinaPct = BigDecimal.ZERO,
+        )
+        assertMonto("3000", r.getValue("Ana").total)
+        assertMonto("6000", r.getValue("Beto").total)
+    }
+
+    @Test
+    fun pesosEnCeroSeIgnoran() {
+        val r = DivisorCuenta.dividirPorPartes(
+            listOf(Item("Pan", bd("2000"))),
+            mapOf(0 to mapOf("Ana" to 0)),
+            listOf("Ana", "Beto"),
+            propinaPct = BigDecimal.ZERO,
+        )
+        assertMonto("1000", r.getValue("Ana").total)
+        assertMonto("1000", r.getValue("Beto").total)
+    }
+
+    @Test
+    fun repartidoEnPartesIguales() {
+        // 21.000 + 10 % = 23.100, entre 3 = 7.700 cada uno, sin importar quién consumió qué
+        val r = DivisorCuenta.dividirIgual(itemsEjemplo, listOf("Ana", "Beto", "Caro"), propinaPct = bd("10"))
+        r.values.forEach { assertMonto("7700", it.total) }
+    }
+
+    @Test
+    fun repartidoCuadraConTotalAunqueNoSeaDivisible() {
+        val r = DivisorCuenta.dividirIgual(listOf(Item("Once", bd("10000"))), listOf("Ana", "Beto", "Caro"), propinaPct = bd("0"))
+        assertMonto("10000", r.values.fold(BigDecimal.ZERO) { a, d -> a + d.total })
+        assertEquals(setOf("3333", "3334"), r.values.map { it.total.toPlainString() }.toSet())
+    }
 }

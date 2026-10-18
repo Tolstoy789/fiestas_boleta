@@ -41,6 +41,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
 
     // OCR en el teléfono (modelo latino incluido en el APK)
@@ -49,4 +50,6 @@ dependencies {
 
     // Gemma en el teléfono con Google AI Edge (MediaPipe LLM Inference)
     implementation("com.google.mediapipe:tasks-genai:0.10.24")
+    // MPImage/BitmapImageBuilder (para mandar la foto a Gemma) vienen en tasks-core, que trae tasks-vision
+    implementation("com.google.mediapipe:tasks-vision:0.10.+") // 0.10.24 no existe para vision; toma la 0.10 más reciente
 }

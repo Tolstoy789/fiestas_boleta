@@ -29,6 +29,29 @@ object ExtraccionItems {
     """.trimIndent()
 
     /**
+     * Prompt para cuando el modelo también recibe la foto (Gemma 3n entiende imágenes).
+     * El texto del OCR va como apoyo, porque a veces lee bien números que en la foto
+     * se ven borrosos, y al revés.
+     */
+    fun promptConImagen(textoBoleta: String): String = """
+        Eres un asistente que lee boletas de restaurante. Mira la foto de la boleta adjunta
+        y devuelve SOLO un arreglo JSON con los productos consumidos, sin explicaciones ni markdown.
+
+        Formato exacto:
+        [{"item": "nombre del producto", "cantidad": 1, "precio": 1000}]
+
+        Reglas:
+        - "precio" es el precio UNITARIO, como número sin símbolo de moneda ni separador de miles.
+        - Si la línea dice "2 x Cerveza 7.000", entonces cantidad 2 y precio 3500.
+        - No incluyas subtotal, total, IVA, impuestos, propina, descuentos ni datos del local.
+        - Si la foto y el texto de apoyo no coinciden, confía en la foto.
+
+        Texto de apoyo leído por OCR (puede tener errores).
+        Texto de la boleta:
+        $textoBoleta
+    """.trimIndent()
+
+    /**
      * Lee el JSON que devolvió el modelo. Tolera texto alrededor, bloques ```json,
      * comillas simples y precios escritos como texto ("12.000").
      */
@@ -61,6 +84,20 @@ object ExtraccionItems {
             val cantidad = cant.toIntOrNull()?.takeIf { it > 0 } ?: 1
             Item(nombre.trim(), totalLinea.divide(cantidad.toBigDecimal(), java.math.MathContext.DECIMAL64), cantidad)
         }
+
+    // "TOTAL  21.000", "Total a pagar: $21.000"; no "SUBTOTAL" ni "TOTAL IVA"
+    private val LINEA_TOTAL = Regex(
+        """^\s*total\b(?!\s*(iva|neto|impuesto))[^\d]*(\d[\d.,]*)\s*$""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * El total impreso en la boleta, si se puede leer. Si hay varias líneas TOTAL
+     * se toma la última, que suele ser la final (con propina o descuentos).
+     */
+    fun totalImpreso(textoBoleta: String): BigDecimal? =
+        textoBoleta.lines().mapNotNull { LINEA_TOTAL.matchEntire(it)?.groupValues?.get(2) }
+            .lastOrNull()?.let(Precios::parsear)
 
     /** Usa el JSON del modelo; si no trae ítems, cae al respaldo por texto. */
     fun extraer(respuestaModelo: String?, textoBoleta: String): List<Item> =

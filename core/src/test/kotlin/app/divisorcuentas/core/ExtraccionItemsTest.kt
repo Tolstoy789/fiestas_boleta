@@ -69,4 +69,16 @@ class ExtraccionItemsTest {
         val r = ExtraccionItems.extraer("lo siento, no pude leerla", "Pizza   12.000")
         assertEquals(listOf("Pizza"), r.map { it.nombre })
     }
+
+    @Test
+    fun totalImpreso() {
+        val texto = """
+            Pizza   12.000
+            SUBTOTAL   21.000
+            TOTAL IVA   3.353
+            Total a pagar: $21.000
+        """.trimIndent()
+        assertMonto("21000", ExtraccionItems.totalImpreso(texto))
+        assertNull(ExtraccionItems.totalImpreso("Pizza   12.000\nSUBTOTAL 12.000"))
+    }
 }
