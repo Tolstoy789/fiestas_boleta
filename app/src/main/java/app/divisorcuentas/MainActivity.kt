@@ -5,26 +5,30 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import app.divisorcuentas.ui.AppDivisor
 import app.divisorcuentas.ui.CuentaViewModel
+import app.divisorcuentas.ui.IntroBoleta
+import app.divisorcuentas.ui.TemaBoleta
 
 class MainActivity : ComponentActivity() {
 
     private val vm: CuentaViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Arranque del sistema (ícono sobre papel) y luego la animación propia.
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            // Colores Material You del teléfono (Android 12+)
-            val ctx = LocalContext.current
-            val colores = if (isSystemInDarkTheme()) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-            MaterialTheme(colorScheme = colores) { AppDivisor(vm) }
+            TemaBoleta {
+                var intro by rememberSaveable { mutableStateOf(true) }
+                if (intro) IntroBoleta(alTerminar = { intro = false }) else AppDivisor(vm)
+            }
         }
     }
 }

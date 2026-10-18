@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paleta del diseño "Boleta" (los mismos valores que ui/Tema.kt) -->
+<resources>
+    <color name="tinta">#1B1F24</color>
+    <color name="papel">#F6F3EC</color>
+    <color name="billete">#1F7A52</color>
+    <color name="corte">#3FBF83</color>
+    <color name="grafito">#5D636B</color>
+</resources>

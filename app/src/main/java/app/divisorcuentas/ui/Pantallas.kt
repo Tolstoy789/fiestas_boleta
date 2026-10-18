@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import app.divisorcuentas.core.Detalle
 import java.io.File
@@ -201,7 +202,10 @@ private fun PantallaItems(vm: CuentaViewModel) {
                 }
             }
         }
-        Text("Total de la boleta: ${dinero(vm.totalBoleta(), vm.conCentavos)}", fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Total de la boleta", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+            Text(dinero(vm.totalBoleta(), vm.conCentavos), style = EstiloMonto.copy(fontSize = 20.sp))
+        }
         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             OutlinedButton(onClick = vm::agregarItem) { Text("Agregar ítem") }
             Button(
@@ -303,7 +307,10 @@ private fun PantallaResumen(vm: CuentaViewModel) {
         reparto.values.forEach { TarjetaPersona(it, vm.conCentavos) }
 
         val total = reparto.values.fold(BigDecimal.ZERO) { acc, d -> acc + d.total }
-        Text("Total a pagar: ${dinero(total, vm.conCentavos)}", style = MaterialTheme.typography.titleLarge)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Total a pagar", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            Text(dinero(total, vm.conCentavos), style = EstiloMonto.copy(fontSize = 24.sp))
+        }
         Button(
             onClick = {
                 val texto = resumenTexto(reparto, total, vm.conCentavos)
@@ -322,7 +329,7 @@ private fun TarjetaPersona(d: Detalle, centavos: Boolean) {
         Column(Modifier.padding(12.dp)) {
             Row {
                 Text(d.nombre, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                Text(dinero(d.total, centavos), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(dinero(d.total, centavos), style = EstiloMonto.copy(fontSize = 20.sp))
             }
             d.items.forEach { (nombre, monto) ->
                 Text("• $nombre: ${dinero(monto, centavos)}", style = MaterialTheme.typography.bodySmall)
