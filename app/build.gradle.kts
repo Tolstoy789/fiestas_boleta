@@ -51,5 +51,5 @@ dependencies {
     // Gemma en el teléfono con Google AI Edge (MediaPipe LLM Inference)
     implementation("com.google.mediapipe:tasks-genai:0.10.24")
     // MPImage/BitmapImageBuilder (para mandar la foto a Gemma) vienen en tasks-core, que trae tasks-vision
-    implementation("com.google.mediapipe:tasks-vision:0.10.24")
+    implementation("com.google.mediapipe:tasks-vision:0.10.+") // 0.10.24 no existe para vision; toma la 0.10 más reciente
 }
