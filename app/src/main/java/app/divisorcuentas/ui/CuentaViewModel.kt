@@ -29,7 +29,10 @@ import app.divisorcuentas.llm.MotorMock
 import app.divisorcuentas.llm.extraerItems
 import app.divisorcuentas.ocr.OcrBoleta
 import app.divisorcuentas.ocr.cargarFotoReducida
+import app.divisorcuentas.pdf.DatosPdf
+import app.divisorcuentas.pdf.DetallePdf
 import kotlinx.coroutines.launch
+import java.io.File
 import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -253,6 +256,27 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     fun transferencias(reparto: Map<String, Detalle>): List<Transferencia> {
         val quien = pagador ?: return emptyList()
         return Saldos.pagoUnico(reparto.mapValues { it.value.total }, quien)
+    }
+
+    /** Arma el PDF con el detalle de la cuenta y se lo entrega a [alTerminar] para compartirlo. */
+    fun exportarPdf(reparto: Map<String, Detalle>, alTerminar: (File) -> Unit) = trabajar("Armando el PDF…") {
+        val ahora = System.currentTimeMillis()
+        val datos = DatosPdf(
+            titulo = tituloCuenta.trim().ifEmpty {
+                "Cuenta del " + SimpleDateFormat("d MMM", Locale.forLanguageTag("es-CL")).format(Date(ahora))
+            },
+            fecha = ahora,
+            items = items.mapNotNull { it.aItem() },
+            partes = partesPorIndice(),
+            participantes = participantes.toList(),
+            reparto = reparto,
+            propinaPct = Precios.parsear(propinaPct) ?: BigDecimal.ZERO,
+            impuestoPct = if (impuestoIncluido) null else Precios.parsear(impuestoPct) ?: BigDecimal.ZERO,
+            pagador = pagador,
+            transferencias = transferencias(reparto),
+            centavos = conCentavos,
+        )
+        alTerminar(DetallePdf.crear(getApplication(), datos))
     }
 
     fun totalBoleta(): BigDecimal = DivisorCuenta.totalBoleta(items.mapNotNull { it.aItem() })

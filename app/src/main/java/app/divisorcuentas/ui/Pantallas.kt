@@ -1,5 +1,7 @@
 package app.divisorcuentas.ui
 
+import android.content.ClipData
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -478,6 +480,10 @@ private fun PantallaResumen(vm: CuentaViewModel) {
             OutlinedButton(onClick = { vm.guardarEnHistorial(reparto) }, Modifier.weight(1f)) {
                 Text("Guardar")
             }
+            OutlinedButton(
+                onClick = { vm.exportarPdf(reparto) { compartirPdf(context, it) } },
+                modifier = Modifier.weight(1f),
+            ) { Text("PDF") }
             Button(
                 onClick = {
                     val texto = resumenTexto(reparto, total, transferencias, vm.conCentavos)
@@ -557,6 +563,17 @@ private fun TarjetaPersona(d: Detalle, centavos: Boolean) {
             )
         }
     }
+}
+
+/** Abre el menú de compartir con el PDF (WhatsApp, correo, guardar en Archivos…). */
+private fun compartirPdf(context: Context, archivo: File) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.archivos", archivo)
+    val envio = Intent(Intent.ACTION_SEND)
+        .setType("application/pdf")
+        .putExtra(Intent.EXTRA_STREAM, uri)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    envio.clipData = ClipData.newRawUri(archivo.name, uri)
+    context.startActivity(Intent.createChooser(envio, "Compartir detalle en PDF"))
 }
 
 private fun resumenTexto(
