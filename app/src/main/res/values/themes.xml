@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Pantalla de arranque del sistema: el ícono sobre papel, mientras carga la app -->
+    <style name="Theme.Divisor.Arranque" parent="Theme.SplashScreen.IconBackground">
+        <item name="windowSplashScreenBackground">@color/papel</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/tinta</item>
+        <item name="postSplashScreenTheme">@style/Theme.Divisor</item>
+    </style>
+
+    <style name="Theme.Divisor" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/papel</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

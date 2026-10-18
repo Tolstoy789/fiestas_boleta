@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ícono Boleta: ticket cortado por una línea verde (diseño B). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:pivotX="54" android:pivotY="54" android:scaleX="0.7" android:scaleY="0.7">
+        <path android:fillColor="@color/papel" android:pathData="M30,22l4,4 4,-4 4,4 4,-4 4,4 4,-4 4,4 4,-4 4,4 4,-4 4,4v60l-4,-4 -4,4 -4,-4 -4,4 -4,-4 -4,4 -4,-4 -4,4 -4,-4 -4,4 -4,-4z" />
+        <path android:fillColor="@color/tinta" android:pathData="M37,36h16v4h-16zM62,36h9v4h-9zM37,46h12v4h-12zM62,46h9v4h-9zM37,56h18v4h-18zM62,56h9v4h-9z" />
+        <path android:fillColor="@color/billete" android:pathData="M37,68h34v5h-34z" />
+        <path android:fillColor="@color/corte" android:pathData="M52.5,17h3v5h-3zM52.5,26h3v5h-3zM52.5,35h3v5h-3zM52.5,44h3v5h-3zM52.5,53h3v5h-3zM52.5,62h3v5h-3zM52.5,71h3v5h-3zM52.5,80h3v5h-3zM52.5,89h3v5h-3z" />
+    </group>
+</vector>

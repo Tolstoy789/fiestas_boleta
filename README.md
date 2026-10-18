@@ -15,6 +15,23 @@ Google AI Edge. Pensada para el Samsung Galaxy S25 Ultra (sirve en Android 12 o 
 6. **Resumen:** cada persona paga sus ítems más su parte proporcional de propina e impuesto.
    El resultado se puede compartir por WhatsApp.
 
+## Diseño: "Boleta"
+
+Papel y tinta, letra de máquina para los montos y un solo acento verde para el dinero.
+
+| Color | Uso | Hex |
+|---|---|---|
+| Tinta | Texto, botones, fondo del ícono | `#1B1F24` |
+| Papel | Fondo | `#F6F3EC` |
+| Billete | Montos | `#1F7A52` |
+| Corte | Línea de corte del ícono y la animación | `#3FBF83` |
+| Grafito | Texto secundario | `#5D636B` |
+
+- Letra: IBM Plex Sans para textos e IBM Plex Mono para montos (licencia libre OFL, en `licencias/`).
+- Ícono adaptable con versión monocroma para los íconos temáticos de Android 13 o superior.
+- Al abrir: el sistema muestra el ícono sobre papel y luego la animación propia (`ui/IntroBoleta.kt`):
+  el ticket se imprime, una línea verde lo corta y las mitades se separan. Se salta tocando la pantalla.
+
 ## Estructura
 
 | Archivo | Qué hace |
