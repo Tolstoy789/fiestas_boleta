@@ -38,8 +38,10 @@ data class DatosPdf(
     val impuestoPct: BigDecimal?,
     val pagador: String?,
     val transferencias: List<Transferencia>,
-    /** Datos bancarios de quien pagó, para que el resto le deposite. */
-    val datosPago: DatosPago?,
+    /** Datos bancarios de quienes reciben transferencias, para que el resto les deposite. */
+    val datosPorAcreedor: Map<String, DatosPago>,
+    /** Boletas de la juntada, contando esta; si son varias, las transferencias saldan todas. */
+    val boletasEnJuntada: Int = 1,
     val centavos: Boolean,
 )
 
@@ -216,7 +218,8 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
             alDerecha(plata(p.subtotal), colConsumo, y + 18, num)
             alDerecha(plata(p.propina), colPropina, y + 18, num)
             if (conImpuesto) alDerecha(plata(p.impuesto), colImpuesto, y + 18, num)
-            alDerecha(plata(p.total), colTotal, y + 19, texto(13f, TINTA, tipo = monoFuerte))
+            if (p.invitado) alDerecha("Invitado", colTotal, y + 19, texto(12f, BILLETE, 600))
+            else alDerecha(plata(p.total), colTotal, y + 19, texto(13f, TINTA, tipo = monoFuerte))
             y += fila
         }
         asegurar(fila + 4)
@@ -228,24 +231,29 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
     }
 
     private fun quienPaga() {
-        val quien = d.pagador ?: return
         if (d.transferencias.isEmpty()) return
-        val datos = d.datosPago?.lineas().orEmpty()
-        val altoDatos = if (datos.isEmpty()) 0f else 40f + datos.size * 18f
+        val titulo = when {
+            d.boletasEnJuntada > 1 -> "Para quedar a mano: saldo de las ${d.boletasEnJuntada} boletas de la juntada"
+            d.pagador != null -> "Para quedar a mano: ${d.pagador} pagó la cuenta"
+            else -> "Para quedar a mano"
+        }
+        val acreedores = d.transferencias.map { it.a }.distinct().filter { d.datosPorAcreedor[it]?.vacio == false }
+        val altoDatos = acreedores.sumOf { 40 + d.datosPorAcreedor.getValue(it).lineas().size * 18 }.toFloat()
         val alto = 44f + d.transferencias.size * 22f + altoDatos
-        asegurar(alto)
+        asegurar(minOf(alto, ALTO - PIE - MARGEN - 40))
         lienzo.drawRoundRect(RectF(MARGEN, y, derecha, y + alto), 10f, 10f, relleno(VERDE_CLARO))
-        lienzo.drawText("Para quedar a mano: $quien pagó la cuenta", MARGEN + 16, y + 24, texto(12.5f, BILLETE, 600))
+        lienzo.drawText(recortar(titulo, texto(12.5f, BILLETE, 600), anchoUtil - 32), MARGEN + 16, y + 24, texto(12.5f, BILLETE, 600))
         var fy = y + 48
         d.transferencias.forEach { t ->
             lienzo.drawText("${t.de} le transfiere a ${t.a}", MARGEN + 16, fy, texto(11.5f))
             alDerecha(plata(t.monto), derecha - 16, fy, texto(12f, TINTA, tipo = monoFuerte))
             fy += 22
         }
-        if (datos.isNotEmpty()) {
+        acreedores.forEach { quien ->
             // Datos bancarios en un recuadro blanco, para copiarlos tal cual en la app del banco
-            val caja = RectF(MARGEN + 12, fy - 6, derecha - 12, fy - 6 + altoDatos - 8)
-            lienzo.drawRoundRect(caja, 8f, 8f, relleno(0xFFFFFFFF.toInt()))
+            val datos = d.datosPorAcreedor.getValue(quien).lineas()
+            val altoCaja = 40f + datos.size * 18f
+            lienzo.drawRoundRect(RectF(MARGEN + 12, fy - 6, derecha - 12, fy - 6 + altoCaja - 8), 8f, 8f, relleno(0xFFFFFFFF.toInt()))
             lienzo.drawText("Datos para depositar a $quien", MARGEN + 26, fy + 14, texto(10.5f, TINTA, 600))
             var dy = fy + 34
             datos.forEach { (etiqueta, valor) ->
@@ -253,6 +261,7 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
                 lienzo.drawText(recortar(valor, texto(11f, TINTA, tipo = mono), anchoUtil - 170), MARGEN + 136, dy, texto(11f, TINTA, tipo = mono))
                 dy += 18
             }
+            fy += altoCaja
         }
         y += alto + 24
     }
@@ -265,7 +274,8 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
             val alto = 38f + lineas.size * 18f + 24f
             asegurar(minOf(alto, 120f))
             lienzo.drawText(persona, MARGEN + 12, y + 18, texto(12.5f, TINTA, 600))
-            alDerecha(plata(p.total), derecha - 12, y + 18, texto(13f, TINTA, tipo = monoFuerte))
+            if (p.invitado) alDerecha("Invitado: lo cubre el resto", derecha - 12, y + 18, texto(11f, BILLETE, 600))
+            else alDerecha(plata(p.total), derecha - 12, y + 18, texto(13f, TINTA, tipo = monoFuerte))
             y += 30
             lineas.forEach { l ->
                 asegurar(18f)
@@ -318,7 +328,9 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
         val impuesto = d.reparto.values.fold(BigDecimal.ZERO) { a, p -> a + p.impuesto }
         val total = d.reparto.values.fold(BigDecimal.ZERO) { a, p -> a + p.total }
         y += 6
+        val descuento = d.reparto.values.fold(BigDecimal.ZERO) { a, p -> a + p.descuento }
         filaSuma("Suma de los ítems", plata(subtotal), false)
+        if (descuento.signum() != 0) filaSuma("Descuento", "−" + plata(descuento), false)
         filaSuma("Propina ${porcentaje(d.propinaPct)}", plata(propina), false)
         if (d.impuestoPct != null) filaSuma("Impuesto ${porcentaje(d.impuestoPct)}", plata(impuesto), false)
         filaSuma("Total a pagar", plata(total), true)
@@ -337,10 +349,11 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
     private fun nota() {
         asegurar(30f)
         val unidad = if (d.centavos) "centavos" else "pesos"
+        val pie = texto(8.5f, GRAFITO)
+        lienzo.drawText("La propina se reparte en proporción a lo que consumió cada uno.", MARGEN, y + 12, pie)
         lienzo.drawText(
-            "La propina se reparte en proporción a lo que consumió cada uno. Los montos se redondean a $unidad " +
-                "y la diferencia del redondeo va a quien más consumió, para que todo sume el total.",
-            MARGEN, y + 12, texto(8.5f, GRAFITO),
+            "Los montos se redondean a $unidad y la diferencia va a quien más consumió, para que todo sume el total.",
+            MARGEN, y + 24, pie,
         )
     }
 

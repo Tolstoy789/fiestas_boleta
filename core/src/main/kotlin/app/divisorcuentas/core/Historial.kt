@@ -3,11 +3,15 @@ package app.divisorcuentas.core
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.math.BigDecimal
 
 /**
  * Historial de cuentas y grupos de amigos frecuentes, guardados como un JSON.
  * La app decide dónde se guarda el archivo; aquí solo está el formato.
  */
+
+@Serializable
+data class TransferenciaGuardada(val de: String, val a: String, val monto: String)
 
 @Serializable
 data class ItemGuardado(val nombre: String, val cantidad: Int, val precio: String)
@@ -30,7 +34,35 @@ data class CuentaGuardada(
     val totales: Map<String, String> = emptyMap(),
     /** true si el total se dividió en partes iguales en vez de por consumo. */
     val repartido: Boolean = false,
-)
+    val invitados: List<String> = emptyList(),
+    val sinPropina: List<String> = emptyList(),
+    val descuento: String = "0",
+    /** Quién le transfiere a quién (de esta boleta o de toda la juntada). */
+    val transferencias: List<TransferenciaGuardada> = emptyList(),
+    /** Quienes ya hicieron su transferencia. */
+    val pagados: List<String> = emptyList(),
+    /**
+     * Boleta intermedia de una juntada: sus deudas quedan incluidas en la
+     * última boleta de la juntada, que trae el saldo neto de todas.
+     */
+    val parteDeJuntada: Boolean = false,
+) {
+    /**
+     * Transferencias de la cuenta. Las cuentas guardadas antes de existir este
+     * campo se calculan desde quién pagó y los totales.
+     */
+    fun deudas(): List<Transferencia> {
+        if (parteDeJuntada) return emptyList()
+        if (transferencias.isNotEmpty()) {
+            return transferencias.mapNotNull { t -> t.monto.toBigDecimalOrNull()?.let { Transferencia(t.de, t.a, it) } }
+        }
+        val quien = pagador ?: return emptyList()
+        return Saldos.pagoUnico(totales.mapValues { it.value.toBigDecimalOrNull() ?: BigDecimal.ZERO }, quien)
+    }
+
+    /** Transferencias que todavía nadie marcó como hechas. */
+    fun pendientes(): List<Transferencia> = deudas().filter { it.de !in pagados }
+}
 
 @Serializable
 data class Grupo(val nombre: String, val miembros: List<String>)
@@ -93,6 +125,28 @@ object Historial {
 
     fun borrarGrupo(archivo: ArchivoHistorial, nombre: String): ArchivoHistorial =
         archivo.copy(grupos = archivo.grupos.filterNot { it.nombre == nombre })
+
+    /** Marca (o desmarca) que [persona] ya hizo su transferencia en la cuenta [creada]. */
+    fun marcarPagado(archivo: ArchivoHistorial, creada: Long, persona: String, pagado: Boolean): ArchivoHistorial =
+        archivo.copy(cuentas = archivo.cuentas.map { c ->
+            if (c.creada != creada) c
+            else c.copy(pagados = if (pagado) (c.pagados + persona).distinct() else c.pagados - persona)
+        })
+
+    /**
+     * Junta un respaldo con lo que ya hay: suma las cuentas que falten (si una
+     * está en los dos, gana la del respaldo), agrega los grupos y los datos
+     * bancarios que no estén.
+     */
+    fun combinar(actual: ArchivoHistorial, respaldo: ArchivoHistorial): ArchivoHistorial {
+        val porId = (actual.cuentas + respaldo.cuentas).associateBy { it.creada }
+        var r = actual.copy(cuentas = porId.values.sortedByDescending { it.creada }.take(MAX_CUENTAS))
+        respaldo.grupos.filter { g -> actual.grupos.none { it.nombre.equals(g.nombre, ignoreCase = true) } }
+            .forEach { r = guardarGrupo(r, it) }
+        respaldo.datosPago.filter { (p, _) -> datosPagoDe(actual, p) == null }
+            .forEach { (p, d) -> r = guardarDatosPago(r, p, d) }
+        return r
+    }
 
     /** Datos bancarios de [persona], sin importar mayúsculas; null si no hay. */
     fun datosPagoDe(archivo: ArchivoHistorial, persona: String): DatosPago? =

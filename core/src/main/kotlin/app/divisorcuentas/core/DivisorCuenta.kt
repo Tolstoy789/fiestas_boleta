@@ -32,10 +32,32 @@ data class Item(
 data class Detalle(
     val nombre: String,
     val items: List<Pair<String, BigDecimal>>,
+    /** Lo que consumió, antes de descuentos. */
     val subtotal: BigDecimal,
     val propina: BigDecimal,
     val impuesto: BigDecimal,
     val total: BigDecimal,
+    /** Su parte del descuento de la boleta (se resta). */
+    val descuento: BigDecimal = BigDecimal.ZERO,
+    /** Lo que pone para cubrir a los invitados. */
+    val aporteInvitados: BigDecimal = BigDecimal.ZERO,
+    /** true si es invitado: no paga y su parte la cubre el resto. */
+    val invitado: Boolean = false,
+)
+
+/**
+ * Ajustes opcionales del cálculo.
+ *
+ * @property invitados No pagan (ej. el cumpleañero). Lo suyo, con propina, se
+ *   reparte en partes iguales entre los demás.
+ * @property sinPropina No ponen propina.
+ * @property descuento Monto a restar de la boleta (cupón, promoción), repartido
+ *   en proporción a lo que consumió cada uno, antes de calcular la propina.
+ */
+data class Ajustes(
+    val invitados: Set<String> = emptySet(),
+    val sinPropina: Set<String> = emptySet(),
+    val descuento: BigDecimal = BigDecimal.ZERO,
 )
 
 object DivisorCuenta {
@@ -63,10 +85,11 @@ object DivisorCuenta {
         impuestoPct: BigDecimal = BigDecimal.ZERO,
         impuestoIncluido: Boolean = true,
         unidad: BigDecimal = BigDecimal.ONE,
+        ajustes: Ajustes = Ajustes(),
     ): Map<String, Detalle> = dividirPorPartes(
         items,
         asignaciones.mapValues { (_, quienes) -> quienes.associateWith { 1 } },
-        participantes, propinaPct, impuestoPct, impuestoIncluido, unidad,
+        participantes, propinaPct, impuestoPct, impuestoIncluido, unidad, ajustes,
     )
 
     /**
@@ -82,8 +105,11 @@ object DivisorCuenta {
         impuestoPct: BigDecimal = BigDecimal.ZERO,
         impuestoIncluido: Boolean = true,
         unidad: BigDecimal = BigDecimal.ONE,
+        ajustes: Ajustes = Ajustes(),
     ): Map<String, Detalle> {
         require(participantes.isNotEmpty()) { "Debe haber al menos un participante." }
+        val pagan = participantes.filterNot { it in ajustes.invitados }
+        require(pagan.isNotEmpty()) { "Alguien tiene que pagar: no pueden ser todos invitados." }
         val desconocidos = partes.values.flatMap { it.keys }.toSet() - participantes.toSet()
         require(desconocidos.isEmpty()) { "Participantes no registrados: ${desconocidos.sorted()}" }
 
@@ -100,16 +126,28 @@ object DivisorCuenta {
             }
         }
 
-        // 2. Propina e impuesto proporcionales al subtotal.
-        val exactos = participantes.map { p ->
-            val lineas = consumos.getValue(p)
-            val subtotal = lineas.fold(BigDecimal.ZERO) { acc, l -> acc + l.second }
-            val propina = subtotal * propinaPct.divide(CIEN, MC)
-            val imp = subtotal * impuesto.divide(CIEN, MC)
-            Detalle(p, lineas.toList(), subtotal, propina, imp, subtotal + propina + imp)
+        // 2. Descuento proporcional al consumo; propina e impuesto sobre lo que queda.
+        val subtotales = participantes.associateWith { p -> consumos.getValue(p).fold(BigDecimal.ZERO) { acc, l -> acc + l.second } }
+        val totalConsumo = subtotales.values.fold(BigDecimal.ZERO, BigDecimal::add)
+        val descuento = ajustes.descuento.max(BigDecimal.ZERO).min(totalConsumo)
+        val propios = participantes.map { p ->
+            val subtotal = subtotales.getValue(p)
+            val desc = if (totalConsumo.signum() == 0) BigDecimal.ZERO else descuento * subtotal.divide(totalConsumo, MC)
+            val base = subtotal - desc
+            val propina = if (p in ajustes.sinPropina) BigDecimal.ZERO else base * propinaPct.divide(CIEN, MC)
+            val imp = base * impuesto.divide(CIEN, MC)
+            Detalle(p, consumos.getValue(p).toList(), subtotal, propina, imp, base + propina + imp, descuento = desc)
         }
 
-        // 3. Redondeo que cuadra con el gran total.
+        // 3. Lo de los invitados se reparte en partes iguales entre quienes pagan.
+        val deInvitados = propios.filter { it.nombre in ajustes.invitados }.fold(BigDecimal.ZERO) { acc, d -> acc + d.total }
+        val aporte = deInvitados.divide(pagan.size.toBigDecimal(), MC)
+        val exactos = propios.map { d ->
+            if (d.nombre in ajustes.invitados) d.copy(total = BigDecimal.ZERO, invitado = true)
+            else d.copy(total = d.total + aporte, aporteInvitados = aporte)
+        }
+
+        // 4. Redondeo que cuadra con el gran total.
         return redondearCuadrando(exactos, unidad).associateBy { it.nombre }
     }
 
@@ -125,8 +163,9 @@ object DivisorCuenta {
         impuestoPct: BigDecimal = BigDecimal.ZERO,
         impuestoIncluido: Boolean = true,
         unidad: BigDecimal = BigDecimal.ONE,
+        ajustes: Ajustes = Ajustes(),
     ): Map<String, Detalle> =
-        dividirPorPartes(items, emptyMap(), participantes, propinaPct, impuestoPct, impuestoIncluido, unidad)
+        dividirPorPartes(items, emptyMap(), participantes, propinaPct, impuestoPct, impuestoIncluido, unidad, ajustes)
 
     private fun redondearCuadrando(detalles: List<Detalle>, unidad: BigDecimal): List<Detalle> {
         fun enUnidades(x: BigDecimal, modo: RoundingMode) =
@@ -136,7 +175,7 @@ object DivisorCuenta {
         val objetivo = enUnidades(exacto, RoundingMode.HALF_EVEN)
         val bajos = detalles.associate { it.nombre to enUnidades(it.total, RoundingMode.DOWN) }
         val residuo = (objetivo - bajos.values.fold(BigDecimal.ZERO, BigDecimal::add)).toInt()
-        val reciben = detalles.sortedByDescending { it.subtotal }.take(residuo).map { it.nombre }.toSet()
+        val reciben = detalles.filterNot { it.invitado }.sortedByDescending { it.subtotal }.take(residuo).map { it.nombre }.toSet()
 
         return detalles.map { d ->
             val unidades = bajos.getValue(d.nombre) + if (d.nombre in reciben) BigDecimal.ONE else BigDecimal.ZERO

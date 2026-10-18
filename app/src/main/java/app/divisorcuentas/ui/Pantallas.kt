@@ -1,5 +1,6 @@
 package app.divisorcuentas.ui
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
@@ -32,6 +33,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -65,11 +67,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import app.divisorcuentas.core.DatosPago
 import app.divisorcuentas.core.Detalle
+import app.divisorcuentas.core.Mensajes
 import app.divisorcuentas.core.Transferencia
 import java.io.File
 import java.math.BigDecimal
@@ -170,10 +174,15 @@ private fun PantallaInicio(vm: CuentaViewModel) {
             modifier = Modifier.fillMaxWidth(),
         ) { Text(if (vm.participantes.isEmpty()) "Agrega al menos una persona" else "Siguiente: la boleta") }
         val guardadas = vm.historial.cuentas.size
-        if (guardadas > 0) {
-            OutlinedButton(onClick = { vm.pantalla = Pantalla.HISTORIAL }, Modifier.fillMaxWidth()) {
-                Text("Historial ($guardadas)")
-            }
+        val porCobrar = vm.historial.cuentas.sumOf { it.pendientes().size }
+        OutlinedButton(onClick = { vm.pantalla = Pantalla.HISTORIAL }, Modifier.fillMaxWidth()) {
+            Text(
+                when {
+                    porCobrar > 0 -> "Historial ($guardadas) · $porCobrar por cobrar"
+                    guardadas > 0 -> "Historial ($guardadas)"
+                    else -> "Historial y respaldo"
+                },
+            )
         }
     }
 }
@@ -526,6 +535,7 @@ private fun PantallaResumen(vm: CuentaViewModel) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
         }
+        AjustesCuenta(vm)
         HorizontalDivider()
 
         if (reparto == null) {
@@ -548,11 +558,34 @@ private fun PantallaResumen(vm: CuentaViewModel) {
                 FilterChip(selected = vm.pagador == p, onClick = { vm.pagador = p }, label = { Text(p) })
             }
         }
+        if (vm.boletasJuntada.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("Juntada: ${vm.boletasJuntada.size + 1} boletas", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        (vm.boletasJuntada.map { it.titulo } + "esta").joinToString(" + ") +
+                            " · total ${dinero(vm.totalJuntada(reparto), vm.conCentavos)}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "Las transferencias de abajo saldan todas las boletas juntas.",
+                        style = MaterialTheme.typography.bodySmall, color = Boleta.Grafito,
+                    )
+                    TextButton(onClick = vm::cerrarJuntada) { Text("Cerrar juntada") }
+                }
+            }
+        }
         val transferencias = vm.transferencias(reparto)
+        val datosPorAcreedor = transferencias.map { it.a }.distinct()
+            .mapNotNull { a -> vm.datosPagoDe(a)?.takeUnless { it.vacio }?.let { a to it } }.toMap()
+        val tituloMensaje = vm.tituloCuenta.ifBlank { "la cuenta" }
         transferencias.forEach { t ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("${t.de} le transfiere a ${t.a}", Modifier.weight(1f))
                 Text(dinero(t.monto, vm.conCentavos), style = EstiloMonto.copy(fontSize = 18.sp))
+                TextButton(onClick = {
+                    enviarWhatsApp(context, Mensajes.cobro(t, tituloMensaje, datosPorAcreedor[t.a]) { dinero(it, vm.conCentavos) })
+                }) { Text("Cobrar") }
             }
         }
         val quienPago = vm.pagador
@@ -586,6 +619,9 @@ private fun PantallaResumen(vm: CuentaViewModel) {
             vm.tituloCuenta, { vm.tituloCuenta = it }, Modifier.fillMaxWidth(),
             label = { Text("Nombre de la cuenta (opcional)") }, singleLine = true,
         )
+        OutlinedButton(onClick = { vm.agregarOtraBoleta(reparto) }, Modifier.fillMaxWidth()) {
+            Text("Agregar otra boleta a esta juntada")
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { vm.guardarEnHistorial(reparto) }, Modifier.weight(1f)) {
                 Text("Guardar")
@@ -598,7 +634,7 @@ private fun PantallaResumen(vm: CuentaViewModel) {
                 onClick = {
                     val texto = resumenTexto(
                         reparto, total, transferencias, vm.conCentavos,
-                        datosPago = datosPago?.takeUnless { it.vacio }, repartido = vm.repartido,
+                        datosPorAcreedor = datosPorAcreedor, repartido = vm.repartido,
                     )
                     val envio = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, texto)
                     context.startActivity(Intent.createChooser(envio, "Compartir cuenta"))
@@ -659,27 +695,89 @@ private fun DialogoDatosPago(
 
 @Composable
 private fun PantallaHistorial(vm: CuentaViewModel) {
+    val context = LocalContext.current
     val fecha = remember { SimpleDateFormat("d MMM yyyy, HH:mm", LOCALE) }
+    val exportar = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri?.let(vm::exportarRespaldo)
+    }
+    val importar = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(vm::importarRespaldo)
+    }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { exportar.launch("respaldo-divisor-${SimpleDateFormat("yyyy-MM-dd", LOCALE).format(Date())}.json") },
+                    modifier = Modifier.weight(1f),
+                ) { Text("Exportar respaldo") }
+                OutlinedButton(onClick = { importar.launch(arrayOf("application/json", "text/plain", "*/*")) }, Modifier.weight(1f)) {
+                    Text("Importar")
+                }
+            }
+            Text(
+                "El respaldo guarda cuentas, grupos y datos bancarios. Déjalo en Drive para pasarlo a otro teléfono.",
+                style = MaterialTheme.typography.bodySmall, color = Boleta.Grafito,
+            )
+        }
         if (vm.historial.cuentas.isEmpty()) {
             item { Text("Aún no hay cuentas guardadas.") }
         }
         items(vm.historial.cuentas, key = { it.creada }) { c ->
             val total = c.totales.values.mapNotNull { it.toBigDecimalOrNull() }.fold(BigDecimal.ZERO, BigDecimal::add)
-            Card(Modifier.fillMaxWidth().clickable(onClickLabel = "Abrir cuenta") { vm.abrirDelHistorial(c) }) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(c.titulo, style = MaterialTheme.typography.titleMedium)
+            val deudas = c.deudas()
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(
+                        Modifier.clickable(onClickLabel = "Abrir cuenta") { vm.abrirDelHistorial(c) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(c.titulo, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "${fecha.format(Date(c.creada))} · ${c.participantes.joinToString(", ")}" +
+                                    when {
+                                        c.parteDeJuntada -> " · parte de una juntada"
+                                        c.repartido -> " · repartido"
+                                        else -> ""
+                                    },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Text(dinero(total, c.conCentavos), style = EstiloMonto)
+                        TextButton(
+                            onClick = { vm.borrarDelHistorial(c.creada) },
+                            modifier = Modifier.semantics { contentDescription = "Borrar ${c.titulo}" },
+                        ) { Text("✕") }
+                    }
+                    if (deudas.isNotEmpty()) {
+                        val pendientes = deudas.count { it.de !in c.pagados }
                         Text(
-                            "${fecha.format(Date(c.creada))} · ${c.participantes.joinToString(", ")}",
-                            style = MaterialTheme.typography.bodySmall,
+                            if (pendientes == 0) "Todos pagaron" else "Faltan $pendientes por pagar",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (pendientes == 0) Boleta.Billete else Boleta.Tinta,
+                            modifier = Modifier.padding(top = 6.dp),
                         )
                     }
-                    Text(dinero(total, c.conCentavos), style = EstiloMonto)
-                    TextButton(
-                        onClick = { vm.borrarDelHistorial(c.creada) },
-                        modifier = Modifier.semantics { contentDescription = "Borrar ${c.titulo}" },
-                    ) { Text("✕") }
+                    deudas.forEach { t ->
+                        val pagado = t.de in c.pagados
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = pagado, onCheckedChange = { vm.marcarPagado(c.creada, t.de, it) })
+                            Text(
+                                "${t.de} → ${t.a}", Modifier.weight(1f),
+                                color = if (pagado) Boleta.Grafito else Boleta.Tinta,
+                                textDecoration = if (pagado) TextDecoration.LineThrough else null,
+                            )
+                            Text(dinero(t.monto, c.conCentavos), style = EstiloMonto.copy(fontSize = 14.sp))
+                            if (!pagado) {
+                                TextButton(onClick = {
+                                    enviarWhatsApp(
+                                        context,
+                                        Mensajes.cobro(t, c.titulo, vm.datosPagoDe(t.a)?.takeUnless { it.vacio }) { dinero(it, c.conCentavos) },
+                                    )
+                                }) { Text("Cobrar") }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -709,14 +807,21 @@ private fun TarjetaPersona(d: Detalle, centavos: Boolean, conItems: Boolean) {
         Column(Modifier.padding(12.dp)) {
             Row {
                 Text(d.nombre, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                Text(dinero(d.total, centavos), style = EstiloMonto.copy(fontSize = 20.sp))
+                if (d.invitado) Text("Invitado", style = EstiloMonto.copy(fontSize = 18.sp))
+                else Text(dinero(d.total, centavos), style = EstiloMonto.copy(fontSize = 20.sp))
             }
             if (conItems) d.items.forEach { (nombre, monto) ->
                 Text("• $nombre: ${dinero(monto, centavos)}", style = MaterialTheme.typography.bodySmall)
             }
             Text(
-                "Consumo ${dinero(d.subtotal, centavos)} + propina ${dinero(d.propina, centavos)}" +
-                    if (d.impuesto.signum() != 0) " + impuesto ${dinero(d.impuesto, centavos)}" else "",
+                buildString {
+                    append("Consumo ${dinero(d.subtotal, centavos)}")
+                    if (d.descuento.signum() != 0) append(" − descuento ${dinero(d.descuento, centavos)}")
+                    append(" + propina ${dinero(d.propina, centavos)}")
+                    if (d.impuesto.signum() != 0) append(" + impuesto ${dinero(d.impuesto, centavos)}")
+                    if (d.aporteInvitados.signum() != 0) append(" + invitados ${dinero(d.aporteInvitados, centavos)}")
+                    if (d.invitado) append(". Lo cubre el resto.")
+                },
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -739,11 +844,13 @@ private fun resumenTexto(
     total: BigDecimal,
     transferencias: List<Transferencia>,
     centavos: Boolean,
-    datosPago: DatosPago?,
+    datosPorAcreedor: Map<String, DatosPago>,
     repartido: Boolean,
 ) = buildString {
     appendLine(if (repartido) "Cuenta repartida en partes iguales:" else "Cuenta dividida:")
-    reparto.values.forEach { appendLine("• ${it.nombre}: ${dinero(it.total, centavos)}") }
+    reparto.values.forEach {
+        appendLine(if (it.invitado) "• ${it.nombre}: invitado" else "• ${it.nombre}: ${dinero(it.total, centavos)}")
+    }
     append("Total: ${dinero(total, centavos)}")
     if (transferencias.isNotEmpty()) {
         appendLine()
@@ -751,9 +858,51 @@ private fun resumenTexto(
         appendLine("Transferencias:")
         transferencias.forEach { appendLine("• ${it.de} → ${it.a}: ${dinero(it.monto, centavos)}") }
     }
-    if (datosPago != null && transferencias.isNotEmpty()) {
+    datosPorAcreedor.forEach { (persona, datos) ->
         appendLine()
-        appendLine("Datos para depositar a ${transferencias.first().a}:")
-        datosPago.lineas().forEach { (etiqueta, valor) -> appendLine("$etiqueta: $valor") }
+        appendLine("Datos para depositar a $persona:")
+        datos.lineas().forEach { (etiqueta, valor) -> appendLine("$etiqueta: $valor") }
     }
 }.trimEnd()
+
+/** Abre WhatsApp con el mensaje listo; si no está instalado, el menú de compartir. */
+private fun enviarWhatsApp(context: Context, texto: String) {
+    val envio = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, texto)
+    try {
+        context.startActivity(Intent(envio).setPackage("com.whatsapp"))
+    } catch (e: ActivityNotFoundException) {
+        context.startActivity(Intent.createChooser(envio, "Enviar cobro"))
+    }
+}
+
+/** Descuento, invitados y quién no pone propina; plegado para no estorbar. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AjustesCuenta(vm: CuentaViewModel) {
+    val activos = vm.invitados.size + vm.sinPropina.size + if (vm.descuento.isBlank()) 0 else 1
+    var abierto by rememberSaveable { mutableStateOf(activos > 0) }
+    TextButton(onClick = { abierto = !abierto }) {
+        Text((if (abierto) "Ocultar" else "Invitados, descuento y propina por persona") + if (activos > 0 && !abierto) " ($activos)" else "")
+    }
+    if (!abierto) return
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedTextField(
+            vm.descuento, { vm.descuento = it }, Modifier.fillMaxWidth(),
+            label = { Text("Descuento o cupón ($)") }, singleLine = true,
+            supportingText = { Text("Se resta antes de la propina, en proporción a lo que consumió cada uno.") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        )
+        Text("Invitados (no pagan, lo suyo se reparte entre el resto)", style = MaterialTheme.typography.bodySmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            vm.participantes.forEach { p ->
+                FilterChip(selected = p in vm.invitados, onClick = { vm.alternarInvitado(p) }, label = { Text(p) })
+            }
+        }
+        Text("No ponen propina", style = MaterialTheme.typography.bodySmall)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            vm.participantes.forEach { p ->
+                FilterChip(selected = p in vm.sinPropina, onClick = { vm.alternarSinPropina(p) }, label = { Text(p) })
+            }
+        }
+    }
+}
