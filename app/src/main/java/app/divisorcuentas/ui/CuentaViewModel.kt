@@ -9,7 +9,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.divisorcuentas.core.Ajustes
 import app.divisorcuentas.core.ArchivoHistorial
+import app.divisorcuentas.core.BoletaJuntada
 import app.divisorcuentas.core.CuentaGuardada
 import app.divisorcuentas.core.DatosPago
 import app.divisorcuentas.core.Detalle
@@ -19,9 +21,11 @@ import app.divisorcuentas.core.Grupo
 import app.divisorcuentas.core.Historial
 import app.divisorcuentas.core.Item
 import app.divisorcuentas.core.ItemGuardado
+import app.divisorcuentas.core.Juntada
 import app.divisorcuentas.core.Precios
 import app.divisorcuentas.core.Saldos
 import app.divisorcuentas.core.Transferencia
+import app.divisorcuentas.core.TransferenciaGuardada
 import app.divisorcuentas.historial.RepositorioHistorial
 import app.divisorcuentas.llm.ModeloLocal
 import app.divisorcuentas.llm.MotorAiEdge
@@ -32,13 +36,15 @@ import app.divisorcuentas.ocr.OcrBoleta
 import app.divisorcuentas.ocr.cargarFotoReducida
 import app.divisorcuentas.pdf.DatosPdf
 import app.divisorcuentas.pdf.DetallePdf
-import kotlinx.coroutines.launch
 import java.io.File
 import java.math.BigDecimal
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 enum class Pantalla { INICIO, BOLETA, ITEMS, ASIGNAR, RESUMEN, HISTORIAL }
 
@@ -104,6 +110,14 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
      * iguales), false = "Detallado" (cada uno paga lo que consumió).
      */
     var repartido by mutableStateOf(false)
+    /** No pagan; lo suyo se reparte entre el resto (ej. el cumpleañero). */
+    val invitados = mutableStateListOf<String>()
+    /** No ponen propina. */
+    val sinPropina = mutableStateListOf<String>()
+    /** Monto a restar de la boleta (cupón, promoción). */
+    var descuento by mutableStateOf("")
+    /** Boletas anteriores de la misma juntada (ej. el bar antes de la comida). */
+    val boletasJuntada = mutableStateListOf<BoletaJuntada>()
     /** Quién pagó la cuenta completa; null si aún nadie. */
     var pagador by mutableStateOf<String?>(null)
 
@@ -211,6 +225,7 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun borrarParticipante(nombre: String) {
         participantes.remove(nombre)
+        invitados.remove(nombre); sinPropina.remove(nombre)
         asignaciones.keys.toList().forEach { id -> asignaciones[id] = asignaciones.getValue(id) - nombre }
         if (pagador == nombre) pagador = null
     }
@@ -255,13 +270,63 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
                 impuestoPct = Precios.parsear(impuestoPct) ?: BigDecimal.ZERO,
                 impuestoIncluido = impuestoIncluido,
                 unidad = if (conCentavos) BigDecimal("0.01") else BigDecimal.ONE,
+                ajustes = Ajustes(
+                    invitados = invitados.filter { it in participantes }.toSet(),
+                    sinPropina = sinPropina.filter { it in participantes }.toSet(),
+                    descuento = Precios.parsear(descuento) ?: BigDecimal.ZERO,
+                ),
             )
         }.onFailure { error = it.message }.getOrNull()
     }
 
+    /** Quién le transfiere a quién: de esta boleta, o el saldo neto de toda la juntada. */
     fun transferencias(reparto: Map<String, Detalle>): List<Transferencia> {
-        val quien = pagador ?: return emptyList()
-        return Saldos.pagoUnico(reparto.mapValues { it.value.total }, quien)
+        if (boletasJuntada.isEmpty()) {
+            val quien = pagador ?: return emptyList()
+            return Saldos.pagoUnico(reparto.mapValues { it.value.total }, quien)
+        }
+        return Juntada.transferencias(boletasJuntada + boletaActual(reparto))
+    }
+
+    private fun boletaActual(reparto: Map<String, Detalle>) =
+        BoletaJuntada(tituloOPorDefecto(System.currentTimeMillis()), reparto.mapValues { it.value.total }, pagador)
+
+    private fun tituloOPorDefecto(cuando: Long) = tituloCuenta.trim().ifEmpty {
+        "Cuenta del " + SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("es-CL")).format(Date(cuando))
+    }
+
+    /** Total de la juntada, sumando las boletas anteriores y la actual. */
+    fun totalJuntada(reparto: Map<String, Detalle>): BigDecimal =
+        (boletasJuntada + boletaActual(reparto)).flatMap { it.totales.values }.fold(BigDecimal.ZERO, BigDecimal::add)
+
+    /**
+     * Guarda esta boleta y empieza otra de la misma juntada, con las mismas
+     * personas. Las transferencias se calculan al final sobre todas.
+     */
+    fun agregarOtraBoleta(reparto: Map<String, Detalle>) {
+        guardarEnHistorial(reparto, parteDeJuntada = true)
+        boletasJuntada.add(boletaActual(reparto))
+        items.clear(); asignaciones.clear()
+        textoOcr = ""; totalImpreso = null
+        descuento = ""
+        pagador = null
+        cuentaActual = null
+        tituloCuenta = ""
+        pantalla = Pantalla.BOLETA
+        aviso = "Boleta ${boletasJuntada.size} guardada. Saca la foto de la siguiente."
+    }
+
+    fun cerrarJuntada() {
+        boletasJuntada.clear()
+        aviso = "Juntada cerrada. La próxima boleta parte de cero."
+    }
+
+    fun alternarInvitado(persona: String) {
+        if (!invitados.remove(persona)) invitados.add(persona)
+    }
+
+    fun alternarSinPropina(persona: String) {
+        if (!sinPropina.remove(persona)) sinPropina.add(persona)
     }
 
     /** Arma el PDF con el detalle de la cuenta y se lo entrega a [alTerminar] para compartirlo. */
@@ -277,7 +342,9 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
             participantes = participantes.toList(),
             reparto = reparto,
             repartido = repartido,
-            datosPago = pagador?.let(::datosPagoDe)?.takeUnless { it.vacio },
+            datosPorAcreedor = transferencias(reparto).map { it.a }.distinct()
+                .mapNotNull { a -> datosPagoDe(a)?.takeUnless { it.vacio }?.let { a to it } }.toMap(),
+            boletasEnJuntada = boletasJuntada.size + 1,
             propinaPct = Precios.parsear(propinaPct) ?: BigDecimal.ZERO,
             impuestoPct = if (impuestoIncluido) null else Precios.parsear(impuestoPct) ?: BigDecimal.ZERO,
             pagador = pagador,
@@ -311,11 +378,9 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Historial ----
 
-    fun guardarEnHistorial(reparto: Map<String, Detalle>) {
+    fun guardarEnHistorial(reparto: Map<String, Detalle>, parteDeJuntada: Boolean = false) {
         val creada = cuentaActual ?: System.currentTimeMillis()
-        val titulo = tituloCuenta.trim().ifEmpty {
-            "Cuenta del " + SimpleDateFormat("d MMM, HH:mm", Locale.forLanguageTag("es-CL")).format(Date(creada))
-        }
+        val titulo = tituloOPorDefecto(creada)
         val cuenta = CuentaGuardada(
             creada = creada,
             titulo = titulo,
@@ -329,6 +394,12 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
             pagador = pagador,
             totales = reparto.mapValues { it.value.total.toPlainString() },
             repartido = repartido,
+            invitados = invitados.filter { it in participantes },
+            sinPropina = sinPropina.filter { it in participantes },
+            descuento = descuento.ifBlank { "0" },
+            transferencias = transferencias(reparto).map { TransferenciaGuardada(it.de, it.a, it.monto.toPlainString()) },
+            pagados = historial.cuentas.firstOrNull { it.creada == creada }?.pagados.orEmpty(),
+            parteDeJuntada = parteDeJuntada,
         )
         cuentaActual = creada
         tituloCuenta = titulo
@@ -349,12 +420,42 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         impuestoPct = cuenta.impuestoPct
         conCentavos = cuenta.conCentavos
         repartido = cuenta.repartido
+        invitados.clear(); invitados.addAll(cuenta.invitados)
+        sinPropina.clear(); sinPropina.addAll(cuenta.sinPropina)
+        descuento = cuenta.descuento.takeUnless { it == "0" }.orEmpty()
+        boletasJuntada.clear()
         pagador = cuenta.pagador
         tituloCuenta = cuenta.titulo
         cuentaActual = cuenta.creada
         textoOcr = ""
         totalImpreso = null
         pantalla = Pantalla.RESUMEN
+    }
+
+    fun marcarPagado(creada: Long, persona: String, pagado: Boolean) =
+        actualizarHistorial { Historial.marcarPagado(it, creada, persona, pagado) }
+
+    // ---- Respaldo ----
+
+    /** Escribe el historial completo (cuentas, grupos y datos bancarios) en [uri]. */
+    fun exportarRespaldo(uri: Uri) = trabajar("Guardando el respaldo…") {
+        withContext(Dispatchers.IO) {
+            getApplication<Application>().contentResolver.openOutputStream(uri, "wt")!!.use {
+                it.write(Historial.aJson(historial).toByteArray())
+            }
+        }
+        aviso = "Respaldo guardado: ${historial.cuentas.size} cuentas y ${historial.grupos.size} grupos."
+    }
+
+    /** Lee un respaldo y lo junta con lo que ya hay, sin borrar nada. */
+    fun importarRespaldo(uri: Uri) = trabajar("Leyendo el respaldo…") {
+        val texto = withContext(Dispatchers.IO) {
+            getApplication<Application>().contentResolver.openInputStream(uri)!!.use { it.readBytes().decodeToString() }
+        }
+        val respaldo = Historial.desdeJson(texto)
+        if (respaldo == ArchivoHistorial()) throw IllegalStateException("Ese archivo no es un respaldo de la app o está vacío.")
+        actualizarHistorial { Historial.combinar(it, respaldo) }
+        aviso = "Respaldo importado: ahora hay ${historial.cuentas.size} cuentas y ${historial.grupos.size} grupos."
     }
 
     fun borrarDelHistorial(creada: Long) = actualizarHistorial { Historial.borrarCuenta(it, creada) }
