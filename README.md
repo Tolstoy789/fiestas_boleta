@@ -39,6 +39,9 @@ Papel y tinta, letra de máquina para los montos y un solo acento verde para el 
 | `core/.../DivisorCuenta.kt` | Cálculo del reparto (Kotlin puro, con pruebas). |
 | `core/.../FilasOcr.kt` | Reordena las líneas del OCR en filas ítem + precio. |
 | `core/.../ExtraccionItems.kt` | Prompt para Gemma, lector del JSON y respaldo por expresiones regulares. |
+| `core/.../Historial.kt` | Formato del historial, grupos y datos para depositar. |
+| `core/.../Borrador.kt` | La cuenta en curso, para seguir donde se quedó si Android cierra la app. |
+| `core/.../Rut.kt` | Revisa el dígito verificador del RUT y lo escribe como 12.345.678-5. |
 | `app/.../ocr/OcrBoleta.kt` | OCR con ML Kit. |
 | `app/.../llm/MotorLlm.kt` | Interfaz `MotorLlm` con dos motores: `MotorMock` (sin modelo) y `MotorAiEdge` (Gemma). |
 | `app/.../llm/ModeloLocal.kt` | Copia el archivo del modelo dentro de la app. |
@@ -54,6 +57,16 @@ Para conectar otro motor (otro SDK de AI Edge, LiteRT-LM, un servidor local), im
 - Propina e impuesto se reparten en proporción a lo que consumió cada uno.
 - Por defecto el impuesto se considera incluido en los precios (como el IVA en Chile); se puede desactivar.
 - Los montos se redondean a pesos o centavos y la suma siempre cuadra con el total.
+
+## Si Android cierra la app
+
+Al pasar a segundo plano (por ejemplo para mandar un cobro por WhatsApp) la cuenta en curso se
+guarda en `files/borrador.json`; al volver se sigue en la misma pantalla. Si pasaron más de seis
+horas, solo se recuperan las personas y el modo. Cobrar, compartir o sacar el PDF también guarda
+la cuenta en el historial, para que la deuda quede anotada.
+
+El respaldo automático de Android (cuenta de Google) incluye historial, grupos y datos bancarios,
+pero no el modelo de Gemma, que pesa varios GB y haría que Android no respaldara nada.
 
 ## Compilar e instalar en el teléfono
 
@@ -82,4 +95,6 @@ así que hay que descargar el archivo `.task` aparte:
 ./gradlew :core:test
 ```
 
-13 pruebas: reparto, agrupación de filas del OCR, lectura de precios (`12.000`, `12,50`, `1.234,56`) y del JSON.
+43 pruebas: reparto (detallado, repartido, invitados, descuentos), saldos y juntadas, agrupación de
+filas del OCR, lectura de precios (`12.000`, `12,50`, `1.234,56`, `$12.000.-`) y del JSON, total
+impreso, historial y respaldo, RUT y la cuenta en curso.

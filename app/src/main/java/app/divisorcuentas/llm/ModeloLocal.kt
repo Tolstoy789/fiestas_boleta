@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.Locale
 
 /**
  * Guarda el archivo del modelo dentro de la app.
@@ -16,26 +17,58 @@ import java.io.File
  */
 object ModeloLocal {
 
+    private val EXTENSIONES = setOf("task", "litertlm")
+
+    /** Espacio que se deja libre en el teléfono además de lo que pesa el modelo. */
+    private const val RESERVA = 500L * 1024 * 1024
+
     private fun carpeta(context: Context) = File(context.filesDir, "modelos").apply { mkdirs() }
 
     /** El modelo ya importado, si existe. */
     fun actual(context: Context): File? =
-        carpeta(context).listFiles { f -> f.extension in setOf("task", "litertlm") }?.maxByOrNull { it.lastModified() }
+        carpeta(context).listFiles { f -> f.extension in EXTENSIONES }?.maxByOrNull { it.lastModified() }
 
-    /** Copia el modelo elegido por el usuario. Puede tardar: pesa varios GB. */
+    /**
+     * Copia el modelo elegido por el usuario. Puede tardar: pesa varios GB.
+     * Se copia a un archivo temporal y solo al terminar reemplaza al anterior, así
+     * una copia que falla a la mitad no deja la app sin modelo ni con uno roto.
+     */
     suspend fun importar(context: Context, uri: Uri): File = withContext(Dispatchers.IO) {
-        val nombre = nombreArchivo(context, uri) ?: "modelo.task"
-        carpeta(context).listFiles()?.forEach { it.delete() } // un modelo a la vez
-        val destino = File(carpeta(context), nombre)
-        context.contentResolver.openInputStream(uri).use { entrada ->
-            requireNotNull(entrada) { "No se pudo abrir el archivo del modelo." }
-            destino.outputStream().use { entrada.copyTo(it, bufferSize = 1 shl 20) }
+        val (nombreLeido, tamano) = info(context, uri)
+        val nombre = nombreLeido ?: "modelo.task"
+        require(nombre.substringAfterLast('.', "").lowercase() in EXTENSIONES) {
+            "\"$nombre\" no es un modelo. Elige el archivo .task de Gemma (por ejemplo gemma-3n-E2B-it-int4.task)."
         }
-        destino
+        val carpeta = carpeta(context)
+        if (tamano != null && carpeta.usableSpace < tamano + RESERVA) {
+            throw IllegalStateException(
+                "No hay espacio: el modelo pesa ${gb(tamano)} y quedan ${gb(carpeta.usableSpace)} libres.",
+            )
+        }
+        val parcial = File(carpeta, "importando.parcial")
+        try {
+            context.contentResolver.openInputStream(uri).use { entrada ->
+                requireNotNull(entrada) { "No se pudo abrir el archivo del modelo." }
+                parcial.outputStream().use { entrada.copyTo(it, bufferSize = 1 shl 20) }
+            }
+            carpeta.listFiles()?.filter { it != parcial }?.forEach { it.delete() } // un modelo a la vez
+            val destino = File(carpeta, nombre)
+            check(parcial.renameTo(destino)) { "No se pudo guardar el modelo." }
+            destino
+        } finally {
+            parcial.delete()
+        }
     }
 
-    private fun nombreArchivo(context: Context, uri: Uri): String? =
-        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) c.getString(0) else null
-        }
+    private fun gb(bytes: Long) = String.format(Locale.forLanguageTag("es-CL"), "%.1f GB", bytes / 1e9)
+
+    /** Nombre y tamaño del archivo elegido, si el proveedor los entrega. */
+    private fun info(context: Context, uri: Uri): Pair<String?, Long?> =
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
+            ?.use { c ->
+                if (!c.moveToFirst()) return@use (null to null)
+                val nombre = if (c.isNull(0)) null else c.getString(0)
+                val tamano = if (c.isNull(1)) null else c.getLong(1)
+                nombre to tamano
+            } ?: (null to null)
 }

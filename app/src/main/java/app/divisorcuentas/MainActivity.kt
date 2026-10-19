@@ -19,16 +19,32 @@ class MainActivity : ComponentActivity() {
 
     private val vm: CuentaViewModel by viewModels()
 
+    private val preferencias by lazy { getSharedPreferences("app", MODE_PRIVATE) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Arranque del sistema (ícono sobre papel) y luego la animación propia.
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Si se volvió hace poco (por ejemplo después de mandar un cobro por WhatsApp), sin animación
+        val volviendo = System.currentTimeMillis() - preferencias.getLong(ULTIMA_VEZ, 0L) < VOLVER_SIN_INTRO_MS
         setContent {
             TemaBoleta {
-                var intro by rememberSaveable { mutableStateOf(true) }
+                var intro by rememberSaveable { mutableStateOf(!volviendo) }
                 if (intro) IntroBoleta(alTerminar = { intro = false }) else AppDivisor(vm)
             }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Android puede cerrar la app en segundo plano: la cuenta en curso queda guardada
+        vm.guardarBorrador()
+        preferencias.edit().putLong(ULTIMA_VEZ, System.currentTimeMillis()).apply()
+    }
+
+    private companion object {
+        const val ULTIMA_VEZ = "ultimaVez"
+        const val VOLVER_SIN_INTRO_MS = 30 * 60 * 1000L
     }
 }
