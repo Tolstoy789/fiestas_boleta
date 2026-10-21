@@ -1,6 +1,7 @@
 package app.divisorcuentas.core
 
 import java.math.BigDecimal
+import java.math.MathContext
 
 /**
  * Convierte el texto de la boleta en una lista de [Item].
@@ -65,7 +66,7 @@ object ExtraccionItems {
         }.toList()
 
     private val PALABRAS_NO_ITEM = Regex(
-        """\b(sub\s*total|total|iva|impuesto|propina|neto|descuento|vuelto|efectivo|tarjeta|cambio|rut|boleta|fecha|mesa|garz[oó]n)\b""",
+        """\b(sub\s*total|total|iva|impuesto|propina|servicio|neto|descuento|vuelto|efectivo|tarjeta|cambio|rut|boleta|folio|fecha|mesa|garz[oó]n|cajer[oa]|sucursal|giro)\b""",
         RegexOption.IGNORE_CASE,
     )
 
@@ -74,26 +75,44 @@ object ExtraccionItems {
         """^\s*(?:(\d{1,2})\s*[xX*]?\s+)?(.*?[A-Za-zÁÉÍÓÚÑáéíóúñ].*?)\s+\$?\s*(\d[\d.,]*)\s*$""",
     )
 
-    /** Respaldo sin modelo: busca líneas con "nombre ... precio". El precio leído es el total de la línea. */
+    // Un precio con separador de miles o de 4 cifras o más al final del nombre: "CERVEZA 3.500"
+    private val PRECIO_AL_FINAL = Regex("""^(.*?[A-Za-zÁÉÍÓÚÑáéíóúñ].*?)\s+\$?\s*(\d{1,3}(?:[.,]\d{3})+|\d{4,})$""")
+
+    /**
+     * Respaldo sin modelo: busca líneas con "nombre ... precio". El precio leído es el total de la línea.
+     * Si antes del total viene el precio unitario ("2 CERVEZA 3.500 7.000" o "CERVEZA 3.500 7.000"),
+     * se saca del nombre y, si no venía la cantidad, se deduce.
+     */
     fun desdeTexto(textoBoleta: String): List<Item> =
         textoBoleta.lines().mapNotNull { linea ->
             if (PALABRAS_NO_ITEM.containsMatchIn(linea)) return@mapNotNull null
             val m = LINEA_ITEM.matchEntire(linea) ?: return@mapNotNull null
-            val (cant, nombre, precioTxt) = m.destructured
+            val (cant, nombreLeido, precioTxt) = m.destructured
             val totalLinea = Precios.parsear(precioTxt) ?: return@mapNotNull null
-            val cantidad = cant.toIntOrNull()?.takeIf { it > 0 } ?: 1
-            Item(nombre.trim(), totalLinea.divide(cantidad.toBigDecimal(), java.math.MathContext.DECIMAL64), cantidad)
+            var nombre = nombreLeido.trim()
+            var cantidad = cant.toIntOrNull()?.takeIf { it > 0 } ?: 1
+            PRECIO_AL_FINAL.matchEntire(nombre)?.let { u ->
+                val unitario = Precios.parsear(u.groupValues[2])?.takeIf { it.signum() > 0 } ?: return@let
+                val veces = totalLinea.divide(unitario, MathContext.DECIMAL64).stripTrailingZeros()
+                val entero = if (veces.scale() <= 0) veces.toInt() else return@let
+                if (entero in 1..50 && (cant.isEmpty() || entero == cantidad)) {
+                    nombre = u.groupValues[1].trim()
+                    cantidad = entero
+                }
+            }
+            Item(nombre, totalLinea.divide(cantidad.toBigDecimal(), MathContext.DECIMAL64), cantidad)
         }
 
-    // "TOTAL  21.000", "Total a pagar: $21.000"; no "SUBTOTAL" ni "TOTAL IVA"
+    // "TOTAL  21.000", "Total a pagar: $21.000"; no "SUBTOTAL", "TOTAL IVA",
+    // "Total con propina" (la propina se calcula aparte) ni "Total ítems: 5"
     private val LINEA_TOTAL = Regex(
-        """^\s*total\b(?!\s*(iva|neto|impuesto))[^\d]*(\d[\d.,]*)\s*$""",
+        """^\s*total\b(?!\s*(iva|neto|impuesto|propina|con\b|c/|[ií]tems?\b|productos|art[ií]culos|unidades|descuento))[^\d]*(\d[\d.,]*)\s*\.?-?\s*$""",
         RegexOption.IGNORE_CASE,
     )
 
     /**
      * El total impreso en la boleta, si se puede leer. Si hay varias líneas TOTAL
-     * se toma la última, que suele ser la final (con propina o descuentos).
+     * se toma la última, que suele ser la final (con descuentos).
      */
     fun totalImpreso(textoBoleta: String): BigDecimal? =
         textoBoleta.lines().mapNotNull { LINEA_TOTAL.matchEntire(it)?.groupValues?.get(2) }
@@ -103,8 +122,20 @@ object ExtraccionItems {
     fun extraer(respuestaModelo: String?, textoBoleta: String): List<Item> =
         respuestaModelo?.let(::desdeJson)?.takeIf { it.isNotEmpty() } ?: desdeTexto(textoBoleta)
 
+    /** Valor de texto de [clave]. La comilla que abre es la que cierra, así "O'Higgins" no se corta. */
     private fun campoTexto(obj: String, clave: String): String? =
-        Regex("""["']$clave["']\s*:\s*["']((?:[^"'\\]|\\.)*)["']""").find(obj)?.groupValues?.get(1)
+        Regex("""["']$clave["']\s*:\s*(["'])((?:\\.|(?!\1).)*)\1""").find(obj)?.groupValues?.get(2)?.let(::desescapar)
+
+    private val ESCAPE = Regex("""\\(u[0-9a-fA-F]{4}|.)""")
+
+    private fun desescapar(s: String): String = ESCAPE.replace(s) { m ->
+        val e = m.groupValues[1]
+        when {
+            e.length == 5 -> e.drop(1).toInt(16).toChar().toString()
+            e == "n" || e == "t" -> " "
+            else -> e
+        }
+    }
 
     private fun campoValor(obj: String, clave: String): String? =
         Regex("""["']$clave["']\s*:\s*["']?(\d(?:[\d.,]*\d)?)""").find(obj)?.groupValues?.get(1)
@@ -118,7 +149,8 @@ object Precios {
      * "3500" -> 3500. Un único separador seguido de exactamente 3 dígitos se toma como miles.
      */
     fun parsear(texto: String): BigDecimal? {
-        val s = texto.trim().removePrefix("$").trim().trimEnd('.', ',')
+        // "$12.000.-" es como se escribe a mano en Chile
+        val s = texto.trim().removePrefix("$").trim().trimEnd('-').trimEnd('.', ',', ' ')
         if (s.isEmpty() || !s.all { it.isDigit() || it == '.' || it == ',' }) return null
         val ultimoPunto = s.lastIndexOf('.')
         val ultimaComa = s.lastIndexOf(',')
@@ -138,4 +170,7 @@ object Precios {
         }
         return normal.toBigDecimalOrNull()
     }
+
+    /** Un porcentaje escrito a mano: "10", "10%", "10 %", "12,5". */
+    fun porcentaje(texto: String): BigDecimal? = parsear(texto.trim().removeSuffix("%").trim())
 }

@@ -8,9 +8,11 @@ import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import androidx.core.content.res.ResourcesCompat
 import app.divisorcuentas.R
+import app.divisorcuentas.core.BoletaJuntada
 import app.divisorcuentas.core.DatosPago
 import app.divisorcuentas.core.Detalle
 import app.divisorcuentas.core.Item
+import app.divisorcuentas.core.Juntada
 import app.divisorcuentas.core.Transferencia
 import app.divisorcuentas.ui.dinero
 import kotlinx.coroutines.Dispatchers
@@ -40,10 +42,12 @@ data class DatosPdf(
     val transferencias: List<Transferencia>,
     /** Datos bancarios de quienes reciben transferencias, para que el resto les deposite. */
     val datosPorAcreedor: Map<String, DatosPago>,
-    /** Boletas de la juntada, contando esta; si son varias, las transferencias saldan todas. */
-    val boletasEnJuntada: Int = 1,
+    /** Todas las boletas de la juntada, contando esta; vacío si es una sola. Las transferencias saldan todas. */
+    val juntada: List<BoletaJuntada> = emptyList(),
     val centavos: Boolean,
-)
+) {
+    val boletasEnJuntada: Int get() = juntada.size.coerceAtLeast(1)
+}
 
 /**
  * Genera un PDF tamaño A4 con el detalle de la cuenta, pensado para mandarlo al
@@ -122,6 +126,7 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
         encabezado()
         resumenPorPersona()
         quienPaga()
+        juntadaCompleta()
         if (!d.repartido) detallePorPersona()
         boletaCompleta()
         nota()
@@ -190,11 +195,15 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
     private fun resumenPorPersona() {
         titulo("Cuánto paga cada uno")
         val conImpuesto = d.impuestoPct != null
-        // Columnas: persona | consumo | propina | (impuesto) | total
+        // Descuento (−) y parte de los invitados (+): sin esta columna la fila no suma el total
+        val conAjuste = d.reparto.values.any { it.descuento.signum() != 0 || it.aporteInvitados.signum() != 0 }
+        // Columnas: persona | consumo | propina | (impuesto) | (ajuste) | total
         val colTotal = derecha - 12
-        val colImpuesto = colTotal - 110
-        val colPropina = if (conImpuesto) colImpuesto - 90 else colTotal - 110
-        val colConsumo = colPropina - 90
+        var x = colTotal - 104
+        val colAjuste = if (conAjuste) x.also { x -= 84 } else 0f
+        val colImpuesto = if (conImpuesto) x.also { x -= 84 } else 0f
+        val colPropina = x.also { x -= 84 }
+        val colConsumo = x
         val fila = 30f
 
         asegurar(fila * 2)
@@ -203,6 +212,7 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
         alDerecha("CONSUMO", colConsumo, y + 14, cab)
         alDerecha("PROPINA", colPropina, y + 14, cab)
         if (conImpuesto) alDerecha("IMPUESTO", colImpuesto, y + 14, cab)
+        if (conAjuste) alDerecha("AJUSTE", colAjuste, y + 14, cab)
         alDerecha("TOTAL", colTotal, y + 14, cab)
         y += 22
 
@@ -213,11 +223,12 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
             // Barra fina proporcional al total, para ver de un vistazo quién paga más
             val largo = (p.total.divide(maximo, MathContext.DECIMAL64).toFloat() * 60f).coerceAtLeast(2f)
             lienzo.drawRoundRect(RectF(MARGEN + 12, y + 21, MARGEN + 12 + largo, y + 24), 1.5f, 1.5f, relleno(BILLETE))
-            lienzo.drawText(recortar(p.nombre, texto(12f, TINTA, 500), colConsumo - MARGEN - 110), MARGEN + 12, y + 17, texto(12f, TINTA, 500))
+            lienzo.drawText(recortar(p.nombre, texto(12f, TINTA, 500), (colConsumo - MARGEN - 100).coerceAtLeast(60f)), MARGEN + 12, y + 17, texto(12f, TINTA, 500))
             val num = texto(11f, GRAFITO, tipo = mono)
             alDerecha(plata(p.subtotal), colConsumo, y + 18, num)
             alDerecha(plata(p.propina), colPropina, y + 18, num)
             if (conImpuesto) alDerecha(plata(p.impuesto), colImpuesto, y + 18, num)
+            if (conAjuste) alDerecha(conSigno(p.aporteInvitados - p.descuento), colAjuste, y + 18, num)
             if (p.invitado) alDerecha("Invitado", colTotal, y + 19, texto(12f, BILLETE, 600))
             else alDerecha(plata(p.total), colTotal, y + 19, texto(13f, TINTA, tipo = monoFuerte))
             y += fila
@@ -227,7 +238,56 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
         lienzo.drawText("Total", MARGEN + 12, y + 20, texto(12f, PAPEL, 600))
         val total = d.reparto.values.fold(BigDecimal.ZERO) { a, p -> a + p.total }
         alDerecha(plata(total), colTotal, y + 21, texto(13f, PAPEL, tipo = monoFuerte))
-        y += fila + 4 + 24
+        y += fila + 4
+        if (conAjuste) {
+            lienzo.drawText("Ajuste: descuento de la boleta (−) y parte de los invitados (+).", MARGEN + 12, y + 14, texto(9f, GRAFITO))
+            y += 18
+        }
+        y += 24
+    }
+
+    /** Las boletas de la juntada y, por persona, lo que le tocaba, lo que puso y el saldo. */
+    private fun juntadaCompleta() {
+        if (d.juntada.size < 2) return
+        titulo("La juntada completa")
+        d.juntada.forEachIndexed { i, b ->
+            asegurar(22f)
+            val fila = texto(11f)
+            lienzo.drawText(recortar("${i + 1}. ${b.titulo}", fila, anchoUtil - 250), MARGEN + 12, y + 15, fila)
+            lienzo.drawText(b.pagador?.let { "pagó $it" } ?: "sin pagador", derecha - 230, y + 15, texto(9.5f, GRAFITO))
+            alDerecha(plata(b.totales.values.fold(BigDecimal.ZERO, BigDecimal::add)), derecha - 12, y + 15, texto(11f, tipo = mono))
+            y += 22
+        }
+        y += 10
+
+        val colSaldo = derecha - 12
+        val colPuso = colSaldo - 120
+        val colToca = colPuso - 110
+        asegurar(44f)
+        val cab = texto(9.5f, GRAFITO, 600)
+        lienzo.drawText("PERSONA", MARGEN + 12, y + 14, cab)
+        alDerecha("LE TOCABA", colToca, y + 14, cab)
+        alDerecha("PUSO", colPuso, y + 14, cab)
+        alDerecha("SALDO", colSaldo, y + 14, cab)
+        y += 20
+        val toca = Juntada.aPagar(d.juntada)
+        val puso = Juntada.pagado(d.juntada)
+        (toca.keys + puso.keys).forEachIndexed { i, persona ->
+            asegurar(24f)
+            if (i % 2 == 0) lienzo.drawRect(MARGEN, y, derecha, y + 24, relleno(PAPEL))
+            val t = toca[persona] ?: BigDecimal.ZERO
+            val p = puso[persona] ?: BigDecimal.ZERO
+            val num = texto(10.5f, GRAFITO, tipo = mono)
+            lienzo.drawText(recortar(persona, texto(11f, TINTA, 500), colToca - MARGEN - 100), MARGEN + 12, y + 16, texto(11f, TINTA, 500))
+            alDerecha(plata(t), colToca, y + 16, num)
+            alDerecha(plata(p), colPuso, y + 16, num)
+            val saldo = p - t
+            alDerecha(conSigno(saldo), colSaldo, y + 16, texto(11f, if (saldo.signum() > 0) BILLETE else TINTA, tipo = monoFuerte))
+            y += 24
+        }
+        asegurar(18f)
+        lienzo.drawText("Saldo +: le deben · Saldo −: debe. Las transferencias de arriba dejan todo en cero.", MARGEN + 12, y + 14, texto(9f, GRAFITO))
+        y += 18 + 24
     }
 
     private fun quienPaga() {
@@ -290,8 +350,11 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
             }
             asegurar(22f)
             val resumen = buildString {
-                append("Consumo ${plata(p.subtotal)} + propina ${plata(p.propina)}")
+                append("Consumo ${plata(p.subtotal)}")
+                if (p.descuento.signum() != 0) append(" − descuento ${plata(p.descuento)}")
+                append(" + propina ${plata(p.propina)}")
                 if (p.impuesto.signum() != 0) append(" + impuesto ${plata(p.impuesto)}")
+                if (p.aporteInvitados.signum() != 0) append(" + invitados ${plata(p.aporteInvitados)}")
             }
             lienzo.drawText(resumen, MARGEN + 24, y + 14, texto(9.5f, GRAFITO))
             y += 24
@@ -350,9 +413,13 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
         asegurar(30f)
         val unidad = if (d.centavos) "centavos" else "pesos"
         val pie = texto(8.5f, GRAFITO)
-        lienzo.drawText("La propina se reparte en proporción a lo que consumió cada uno.", MARGEN, y + 12, pie)
         lienzo.drawText(
-            "Los montos se redondean a $unidad y la diferencia va a quien más consumió, para que todo sume el total.",
+            if (d.repartido) "El total se dividió en partes iguales entre quienes pagan."
+            else "La propina se reparte en proporción a lo que consumió cada uno.",
+            MARGEN, y + 12, pie,
+        )
+        lienzo.drawText(
+            "Los montos se redondean a $unidad y la diferencia se asigna de a uno, para que todo sume el total.",
             MARGEN, y + 24, pie,
         )
     }
@@ -387,6 +454,13 @@ private class Dibujo(context: Context, private val doc: PdfDocument, private val
     }
 
     private fun porcentaje(x: BigDecimal) = x.stripTrailingZeros().toPlainString() + " %"
+
+    /** "+$3.500", "−$2.000" o "—" si es cero. */
+    private fun conSigno(x: BigDecimal) = when (x.signum()) {
+        0 -> "—"
+        1 -> "+" + plata(x)
+        else -> "−" + plata(x.negate())
+    }
 
     private fun alDerecha(texto: String, x: Float, y: Float, pintura: Paint) {
         lienzo.drawText(texto, x - pintura.measureText(texto), y, pintura)

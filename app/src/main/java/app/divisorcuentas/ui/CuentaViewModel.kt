@@ -7,11 +7,13 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.divisorcuentas.core.Ajustes
 import app.divisorcuentas.core.ArchivoHistorial
 import app.divisorcuentas.core.BoletaJuntada
+import app.divisorcuentas.core.Borrador
 import app.divisorcuentas.core.CuentaGuardada
 import app.divisorcuentas.core.DatosPago
 import app.divisorcuentas.core.Detalle
@@ -26,6 +28,8 @@ import app.divisorcuentas.core.Precios
 import app.divisorcuentas.core.Saldos
 import app.divisorcuentas.core.Transferencia
 import app.divisorcuentas.core.TransferenciaGuardada
+import app.divisorcuentas.core.boleta
+import app.divisorcuentas.core.guardada
 import app.divisorcuentas.historial.RepositorioHistorial
 import app.divisorcuentas.llm.ModeloLocal
 import app.divisorcuentas.llm.MotorAiEdge
@@ -34,6 +38,7 @@ import app.divisorcuentas.llm.MotorMock
 import app.divisorcuentas.llm.extraerItems
 import app.divisorcuentas.ocr.OcrBoleta
 import app.divisorcuentas.ocr.cargarFotoReducida
+import app.divisorcuentas.ocr.pdfAImagen
 import app.divisorcuentas.pdf.DatosPdf
 import app.divisorcuentas.pdf.DetallePdf
 import java.io.File
@@ -43,6 +48,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -128,8 +134,11 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     /** Id de la cuenta abierta del historial, para que volver a guardar la reemplace. */
     private var cuentaActual: Long? = null
 
+    /** Lectura del historial al abrir la app; nada se guarda antes de que termine, para no pisarlo. */
+    private val carga: Job = viewModelScope.launch { historial = repositorio.leer() }
+
     init {
-        viewModelScope.launch { historial = repositorio.leer() }
+        repositorio.leerBorrador()?.let(::restaurar)
     }
 
     // ---- Modelo ----
@@ -148,14 +157,34 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         usarGemma = true
     }
 
-    private fun motor(): MotorLlm {
+    /** Cargar Gemma (varios GB) toma segundos: se hace fuera del hilo de la pantalla para que no se congele. */
+    private suspend fun motor(): MotorLlm {
         if (!usarGemma) return MotorMock()
-        return motorGemma ?: MotorAiEdge(getApplication(), requireNotNull(archivoModelo)).also { motorGemma = it }
+        motorGemma?.let { return it }
+        ocupado = "Cargando Gemma (la primera vez tarda un poco)…"
+        val archivo = requireNotNull(archivoModelo)
+        return withContext(Dispatchers.Default) { MotorAiEdge(getApplication(), archivo) }.also { motorGemma = it }
     }
 
     // ---- Boleta ----
 
-    fun procesarFoto(uri: Uri) = trabajar("Leyendo la boleta…") {
+    fun procesarFoto(uri: Uri) = trabajar("Leyendo la boleta…") { leerBoleta(uri) }
+
+    /**
+     * Una boleta que llegó después del evento (por correo, WhatsApp o Drive): una imagen
+     * o un PDF. Del PDF se lee la primera página.
+     */
+    fun procesarArchivo(uri: Uri) {
+        val app = getApplication<Application>()
+        if (app.contentResolver.getType(uri) != "application/pdf") return procesarFoto(uri)
+        trabajar("Abriendo el PDF…") {
+            val imagen = pdfAImagen(app, uri)
+            ocupado = "Leyendo la boleta…"
+            leerBoleta(FileProvider.getUriForFile(app, "${app.packageName}.archivos", imagen))
+        }
+    }
+
+    private suspend fun leerBoleta(uri: Uri) {
         textoOcr = ocr.extraerTexto(uri)
         if (textoOcr.isBlank()) {
             throw IllegalStateException("No se encontró texto en la foto. Prueba con más luz y la boleta recta.")
@@ -168,10 +197,14 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
             foto != null -> "Gemma está mirando la boleta…"
             else -> "Gemma está ordenando los ítems…"
         }
-        val extraidos = extraerItems(motor, textoOcr, foto)
+        val extraccion = extraerItems(motor, textoOcr, foto)
         nuevaCuenta()
-        extraidos.forEach { items.add(it.editable()) }
-        if (extraidos.isEmpty()) error = "No se reconocieron ítems; agrégalos a mano."
+        extraccion.items.forEach { items.add(it.editable()) }
+        when {
+            extraccion.items.isEmpty() -> error = "No se reconocieron ítems; agrégalos a mano."
+            usarGemma && !extraccion.delModelo ->
+                aviso = "Gemma no entregó los ítems; se leyeron directo del texto. Revísalos."
+        }
         pantalla = Pantalla.ITEMS
     }
 
@@ -182,9 +215,10 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         pantalla = Pantalla.ITEMS
     }
 
-    /** Limpia los ítems y asignaciones; los participantes se mantienen para la próxima ronda. */
+    /** Limpia los ítems, asignaciones y el descuento; los participantes se mantienen para la próxima ronda. */
     private fun nuevaCuenta() {
         items.clear(); asignaciones.clear()
+        descuento = ""
         pagador = pagador?.takeIf { it in participantes }
         cuentaActual = null
         tituloCuenta = ""
@@ -220,7 +254,9 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun agregarParticipante(nombre: String) {
         val n = nombre.trim()
-        if (n.isNotEmpty() && participantes.none { it.equals(n, ignoreCase = true) }) participantes.add(n)
+        if (n.isEmpty()) return
+        if (participantes.any { it.equals(n, ignoreCase = true) }) aviso = "$n ya está en la lista."
+        else participantes.add(n)
     }
 
     fun borrarParticipante(nombre: String) {
@@ -230,7 +266,9 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         if (pagador == nombre) pagador = null
     }
 
-    fun usarGrupo(grupo: Grupo) = grupo.miembros.forEach(::agregarParticipante)
+    fun usarGrupo(grupo: Grupo) = grupo.miembros
+        .filter { m -> participantes.none { it.equals(m, ignoreCase = true) } }
+        .forEach { participantes.add(it) }
 
     fun guardarGrupo(nombre: String) {
         if (nombre.isBlank() || participantes.isEmpty()) return
@@ -260,14 +298,25 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     /** Ítems que no se pueden leer (precio inválido). */
     val itemsInvalidos: List<ItemEditable> get() = items.filter { it.aItem() == null }
 
+    /** Por qué todavía no se puede calcular, en palabras; null si se puede. */
+    fun motivoSinCalculo(): String? = when {
+        participantes.isEmpty() -> "Agrega al menos una persona."
+        items.isEmpty() -> "Agrega al menos un ítem."
+        itemsInvalidos.isNotEmpty() ->
+            "Revisa el precio de: " + itemsInvalidos.joinToString(", ") { it.nombre.ifBlank { "ítem sin nombre" } } + "."
+        participantes.all { it in invitados } -> "Alguien tiene que pagar: no pueden ser todos invitados."
+        else -> null
+    }
+
+    /** El reparto de esta boleta, o null si falta algo (ver [motivoSinCalculo]). No cambia ningún estado. */
     fun calcular(): Map<String, Detalle>? {
-        if (participantes.isEmpty() || items.isEmpty() || itemsInvalidos.isNotEmpty()) return null
+        if (motivoSinCalculo() != null) return null
         val validos = items.map { it.aItem()!! }
         return runCatching {
             DivisorCuenta.dividirPorPartes(
                 validos, partesParaCalcular(), participantes.toList(),
-                propinaPct = Precios.parsear(propinaPct) ?: BigDecimal.ZERO,
-                impuestoPct = Precios.parsear(impuestoPct) ?: BigDecimal.ZERO,
+                propinaPct = Precios.porcentaje(propinaPct) ?: BigDecimal.ZERO,
+                impuestoPct = Precios.porcentaje(impuestoPct) ?: BigDecimal.ZERO,
                 impuestoIncluido = impuestoIncluido,
                 unidad = if (conCentavos) BigDecimal("0.01") else BigDecimal.ONE,
                 ajustes = Ajustes(
@@ -276,17 +325,27 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
                     descuento = Precios.parsear(descuento) ?: BigDecimal.ZERO,
                 ),
             )
-        }.onFailure { error = it.message }.getOrNull()
+        }.getOrNull()
     }
 
-    /** Quién le transfiere a quién: de esta boleta, o el saldo neto de toda la juntada. */
+    /**
+     * Quién le transfiere a quién: de esta boleta, o el saldo neto de toda la juntada.
+     * Sin saber quién pagó esta boleta no hay transferencias (en una juntada no cuadrarían).
+     */
     fun transferencias(reparto: Map<String, Detalle>): List<Transferencia> {
-        if (boletasJuntada.isEmpty()) {
-            val quien = pagador ?: return emptyList()
-            return Saldos.pagoUnico(reparto.mapValues { it.value.total }, quien)
-        }
+        val quien = pagador ?: return emptyList()
+        if (boletasJuntada.isEmpty()) return Saldos.pagoUnico(reparto.mapValues { it.value.total }, quien)
         return Juntada.transferencias(boletasJuntada + boletaActual(reparto))
     }
+
+    /** Quienes reciben plata: a ellos se les piden los datos para depositar. */
+    fun acreedores(reparto: Map<String, Detalle>): List<String> =
+        transferencias(reparto).map { it.a }.distinct().ifEmpty { listOfNotNull(pagador) }
+
+    /** Datos bancarios de quienes reciben transferencias, los que estén guardados. */
+    fun datosPorAcreedor(transferencias: List<Transferencia>): Map<String, DatosPago> =
+        transferencias.map { it.a }.distinct()
+            .mapNotNull { a -> datosPagoDe(a)?.takeUnless { it.vacio }?.let { a to it } }.toMap()
 
     private fun boletaActual(reparto: Map<String, Detalle>) =
         BoletaJuntada(tituloOPorDefecto(System.currentTimeMillis()), reparto.mapValues { it.value.total }, pagador)
@@ -304,6 +363,10 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
      * personas. Las transferencias se calculan al final sobre todas.
      */
     fun agregarOtraBoleta(reparto: Map<String, Detalle>) {
+        if (pagador == null) {
+            aviso = "Primero elige quién pagó esta boleta."
+            return
+        }
         guardarEnHistorial(reparto, parteDeJuntada = true)
         boletasJuntada.add(boletaActual(reparto))
         items.clear(); asignaciones.clear()
@@ -322,7 +385,12 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun alternarInvitado(persona: String) {
-        if (!invitados.remove(persona)) invitados.add(persona)
+        if (invitados.remove(persona)) return
+        if (participantes.none { it != persona && it !in invitados }) {
+            aviso = "Alguien tiene que pagar: no pueden ser todos invitados."
+            return
+        }
+        invitados.add(persona)
     }
 
     fun alternarSinPropina(persona: String) {
@@ -332,23 +400,21 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     /** Arma el PDF con el detalle de la cuenta y se lo entrega a [alTerminar] para compartirlo. */
     fun exportarPdf(reparto: Map<String, Detalle>, alTerminar: (File) -> Unit) = trabajar("Armando el PDF…") {
         val ahora = System.currentTimeMillis()
+        val deudas = transferencias(reparto)
         val datos = DatosPdf(
-            titulo = tituloCuenta.trim().ifEmpty {
-                "Cuenta del " + SimpleDateFormat("d MMM", Locale.forLanguageTag("es-CL")).format(Date(ahora))
-            },
+            titulo = tituloOPorDefecto(ahora),
             fecha = ahora,
             items = items.mapNotNull { it.aItem() },
             partes = partesParaCalcular(),
             participantes = participantes.toList(),
             reparto = reparto,
             repartido = repartido,
-            datosPorAcreedor = transferencias(reparto).map { it.a }.distinct()
-                .mapNotNull { a -> datosPagoDe(a)?.takeUnless { it.vacio }?.let { a to it } }.toMap(),
-            boletasEnJuntada = boletasJuntada.size + 1,
-            propinaPct = Precios.parsear(propinaPct) ?: BigDecimal.ZERO,
-            impuestoPct = if (impuestoIncluido) null else Precios.parsear(impuestoPct) ?: BigDecimal.ZERO,
+            datosPorAcreedor = datosPorAcreedor(deudas),
+            juntada = if (boletasJuntada.isEmpty()) emptyList() else boletasJuntada + boletaActual(reparto),
+            propinaPct = Precios.porcentaje(propinaPct) ?: BigDecimal.ZERO,
+            impuestoPct = if (impuestoIncluido) null else Precios.porcentaje(impuestoPct) ?: BigDecimal.ZERO,
             pagador = pagador,
-            transferencias = transferencias(reparto),
+            transferencias = deudas,
             centavos = conCentavos,
         )
         alTerminar(DetallePdf.crear(getApplication(), datos))
@@ -378,10 +444,26 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Historial ----
 
-    fun guardarEnHistorial(reparto: Map<String, Detalle>, parteDeJuntada: Boolean = false) {
+    /**
+     * Guarda la cuenta (o la reemplaza, si ya estaba). Con [avisar] = false se guarda
+     * sin mostrar nada: así pasa al cobrar o compartir, para que la deuda quede anotada.
+     */
+    fun guardarEnHistorial(reparto: Map<String, Detalle>, parteDeJuntada: Boolean = false, avisar: Boolean = true) {
         val creada = cuentaActual ?: System.currentTimeMillis()
         val titulo = tituloOPorDefecto(creada)
-        val cuenta = CuentaGuardada(
+        val anterior = historial.cuentas.firstOrNull { it.creada == creada }
+        // Una boleta intermedia de juntada sigue siéndolo aunque se abra y se guarde de nuevo
+        val cuenta = comoGuardada(reparto, creada, titulo, parteDeJuntada || anterior?.parteDeJuntada == true)
+            .copy(pagados = anterior?.pagados.orEmpty())
+        cuentaActual = creada
+        tituloCuenta = titulo
+        actualizarHistorial { Historial.agregarCuenta(it, cuenta) }
+        if (avisar) aviso = "Guardada en el historial."
+    }
+
+    /** La cuenta en pantalla en el formato del historial; sin [reparto] van sin totales ni transferencias. */
+    private fun comoGuardada(reparto: Map<String, Detalle>?, creada: Long, titulo: String, parteDeJuntada: Boolean) =
+        CuentaGuardada(
             creada = creada,
             titulo = titulo,
             items = items.map { ItemGuardado(it.nombre, it.unidades, it.precio) },
@@ -392,22 +474,27 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
             impuestoPct = impuestoPct,
             conCentavos = conCentavos,
             pagador = pagador,
-            totales = reparto.mapValues { it.value.total.toPlainString() },
+            totales = reparto?.mapValues { it.value.total.toPlainString() }.orEmpty(),
             repartido = repartido,
             invitados = invitados.filter { it in participantes },
             sinPropina = sinPropina.filter { it in participantes },
             descuento = descuento.ifBlank { "0" },
-            transferencias = transferencias(reparto).map { TransferenciaGuardada(it.de, it.a, it.monto.toPlainString()) },
-            pagados = historial.cuentas.firstOrNull { it.creada == creada }?.pagados.orEmpty(),
+            transferencias = reparto?.let { transferencias(it) }.orEmpty()
+                .map { TransferenciaGuardada(it.de, it.a, it.monto.toPlainString()) },
             parteDeJuntada = parteDeJuntada,
         )
-        cuentaActual = creada
-        tituloCuenta = titulo
-        actualizarHistorial { Historial.agregarCuenta(it, cuenta) }
-        aviso = "Guardada en el historial."
-    }
 
     fun abrirDelHistorial(cuenta: CuentaGuardada) {
+        cargarCuenta(cuenta)
+        boletasJuntada.clear()
+        cuentaActual = cuenta.creada
+        textoOcr = ""
+        totalImpreso = null
+        pantalla = Pantalla.RESUMEN
+    }
+
+    /** Pone en pantalla los datos de [cuenta]: personas, ítems, marcas y ajustes. */
+    private fun cargarCuenta(cuenta: CuentaGuardada) {
         items.clear(); asignaciones.clear(); participantes.clear()
         participantes.addAll(cuenta.participantes)
         cuenta.items.forEachIndexed { i, guardado ->
@@ -423,13 +510,43 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         invitados.clear(); invitados.addAll(cuenta.invitados)
         sinPropina.clear(); sinPropina.addAll(cuenta.sinPropina)
         descuento = cuenta.descuento.takeUnless { it == "0" }.orEmpty()
-        boletasJuntada.clear()
         pagador = cuenta.pagador
         tituloCuenta = cuenta.titulo
-        cuentaActual = cuenta.creada
-        textoOcr = ""
-        totalImpreso = null
-        pantalla = Pantalla.RESUMEN
+    }
+
+    // ---- Cuenta en curso (si Android cierra la app) ----
+
+    /** Se llama cuando la app pasa a segundo plano. */
+    fun guardarBorrador() {
+        val ahora = System.currentTimeMillis()
+        val b = Borrador(
+            guardado = ahora,
+            pantalla = pantalla.name,
+            cuenta = comoGuardada(calcular(), cuentaActual ?: ahora, tituloCuenta, parteDeJuntada = false),
+            cuentaActual = cuentaActual,
+            juntada = boletasJuntada.map { it.guardada() },
+            textoOcr = textoOcr,
+            totalImpreso = totalImpreso?.toPlainString(),
+        )
+        runCatching { repositorio.guardarBorrador(b) }
+    }
+
+    /**
+     * Sigue donde se quedó. Si pasaron más de unas horas solo recupera las personas
+     * y el modo, para que la próxima salida no parta con la cuenta vieja.
+     */
+    private fun restaurar(b: Borrador) {
+        if (!b.vigente(System.currentTimeMillis())) {
+            participantes.addAll(b.cuenta.participantes)
+            repartido = b.cuenta.repartido
+            return
+        }
+        cargarCuenta(b.cuenta)
+        cuentaActual = b.cuentaActual
+        boletasJuntada.addAll(b.juntada.map { it.boleta() })
+        textoOcr = b.textoOcr
+        totalImpreso = b.totalImpreso?.toBigDecimalOrNull()
+        pantalla = Pantalla.entries.firstOrNull { it.name == b.pantalla } ?: Pantalla.INICIO
     }
 
     fun marcarPagado(creada: Long, persona: String, pagado: Boolean) =
@@ -461,6 +578,10 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     fun borrarDelHistorial(creada: Long) = actualizarHistorial { Historial.borrarCuenta(it, creada) }
 
     private fun actualizarHistorial(cambio: (ArchivoHistorial) -> ArchivoHistorial) {
+        if (!carga.isCompleted) {
+            viewModelScope.launch { carga.join(); actualizarHistorial(cambio) }
+            return
+        }
         val nuevo = cambio(historial)
         historial = nuevo
         viewModelScope.launch {

@@ -17,15 +17,18 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -39,6 +42,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.InputChip
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,6 +57,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,19 +67,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
+import app.divisorcuentas.core.CuentaGuardada
 import app.divisorcuentas.core.DatosPago
 import app.divisorcuentas.core.Detalle
 import app.divisorcuentas.core.Mensajes
+import app.divisorcuentas.core.Precios
+import app.divisorcuentas.core.Rut
 import app.divisorcuentas.core.Transferencia
 import java.io.File
 import java.math.BigDecimal
@@ -81,6 +94,7 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 private val LOCALE = Locale.forLanguageTag("es-CL")
 
@@ -90,9 +104,16 @@ fun dinero(x: BigDecimal, centavos: Boolean): String =
         maximumFractionDigits = if (centavos) 2 else 0
     }.format(x)
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AppDivisor(vm: CuentaViewModel) {
+    // Los avisos (no los errores) se van solos
+    LaunchedEffect(vm.aviso) {
+        if (vm.aviso != null) {
+            delay(4_000)
+            vm.aviso = null
+        }
+    }
     val titulos = mapOf(
         Pantalla.INICIO to "Nueva cuenta",
         Pantalla.BOLETA to "1. Boleta",
@@ -118,7 +139,10 @@ fun AppDivisor(vm: CuentaViewModel) {
             )
         },
     ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().padding(horizontal = 16.dp)) {
+        // imePadding: con la pantalla de borde a borde, el teclado tapaba los campos y botones de abajo
+        Column(
+            Modifier.padding(padding).consumeWindowInsets(padding).imePadding().fillMaxSize().padding(horizontal = 16.dp),
+        ) {
             vm.error?.let {
                 Card(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -133,6 +157,13 @@ fun AppDivisor(vm: CuentaViewModel) {
                         Text(it, Modifier.weight(1f), color = Boleta.Billete)
                         TextButton(onClick = { vm.aviso = null }) { Text("OK") }
                     }
+                }
+            }
+            val ocupado = vm.ocupado
+            if (ocupado != null && vm.pantalla != Pantalla.BOLETA) {
+                Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth(), color = Boleta.Billete)
+                    Text(ocupado, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall)
                 }
             }
             when (vm.pantalla) {
@@ -218,10 +249,19 @@ private fun EditorParticipantes(vm: CuentaViewModel) {
     var nuevo by rememberSaveable { mutableStateOf("") }
     var nombrandoGrupo by rememberSaveable { mutableStateOf(false) }
     Column {
+        val agregar = {
+            vm.agregarParticipante(nuevo)
+            nuevo = ""
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(nuevo, { nuevo = it }, Modifier.weight(1f), label = { Text("Nombre") }, singleLine = true)
+            OutlinedTextField(
+                nuevo, { nuevo = it }, Modifier.weight(1f), label = { Text("Nombre") }, singleLine = true,
+                // "Listo" en el teclado agrega a la persona y deja el campo listo para la siguiente
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { if (nuevo.isNotBlank()) agregar() }),
+            )
             Spacer(Modifier.width(8.dp))
-            Button(onClick = { vm.agregarParticipante(nuevo); nuevo = "" }, enabled = nuevo.isNotBlank()) { Text("Agregar") }
+            Button(onClick = agregar, enabled = nuevo.isNotBlank()) { Text("Agregar") }
         }
         if (vm.historial.grupos.isNotEmpty()) {
             FlowRow(
@@ -279,7 +319,8 @@ private fun EditorParticipantes(vm: CuentaViewModel) {
 @Composable
 private fun PantallaBoleta(vm: CuentaViewModel) {
     val context = LocalContext.current
-    var fotoCamara by remember { mutableStateOf<Uri?>(null) }
+    // Saveable: si Android recrea la pantalla mientras la cámara está abierta, no se pierde la foto
+    var fotoCamara by rememberSaveable { mutableStateOf<Uri?>(null) }
 
     val galeria = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let(vm::procesarFoto)
@@ -290,9 +331,13 @@ private fun PantallaBoleta(vm: CuentaViewModel) {
     val modelo = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::importarModelo)
     }
+    // Boletas que llegan después del evento: una imagen o un PDF en Descargas, Drive, WhatsApp…
+    val buscarArchivo = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(vm::procesarArchivo)
+    }
 
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Saca una foto a la boleta con buena luz, recta y completa.")
+        Text("Saca una foto a la boleta con buena luz, recta y completa, o busca la imagen si te la mandaron después.")
 
         val ocupado = vm.ocupado
         if (ocupado != null) {
@@ -305,12 +350,25 @@ private fun PantallaBoleta(vm: CuentaViewModel) {
                 val archivo = File(context.cacheDir, "boleta.jpg")
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.archivos", archivo)
                 fotoCamara = uri
-                camara.launch(uri)
+                try {
+                    camara.launch(uri)
+                } catch (e: ActivityNotFoundException) {
+                    vm.error = "No se encontró una app de cámara. Elige la foto de la galería."
+                }
             }, Modifier.fillMaxWidth()) { Text("Tomar foto") }
             OutlinedButton(
                 onClick = { galeria.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 Modifier.fillMaxWidth(),
             ) { Text("Elegir de la galería") }
+            OutlinedButton(
+                onClick = { buscarArchivo.launch(arrayOf("image/*", "application/pdf")) },
+                Modifier.fillMaxWidth(),
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Buscar imagen o PDF")
+                    Text("En Descargas, Drive, correo o WhatsApp", style = MaterialTheme.typography.bodySmall)
+                }
+            }
             TextButton(onClick = vm::empezarSinFoto) { Text("Ingresar ítems a mano") }
             val guardadas = vm.historial.cuentas.size
             if (guardadas > 0) {
@@ -374,6 +432,7 @@ private fun PantallaItems(vm: CuentaViewModel) {
                     OutlinedTextField(
                         item.cantidad, { vm.editarItem(item.copy(cantidad = it)) },
                         Modifier.width(56.dp), label = { Text("Cant.") }, singleLine = true,
+                        isError = item.cantidad.isNotBlank() && (item.cantidad.toIntOrNull() ?: 0) < 1,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     )
                     Spacer(Modifier.width(4.dp))
@@ -426,8 +485,13 @@ private fun PantallaItems(vm: CuentaViewModel) {
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun PantallaAsignar(vm: CuentaViewModel) {
+    // Las personas ya se eligieron al inicio: el editor queda plegado para dejar espacio a los ítems
+    var editarPersonas by rememberSaveable { mutableStateOf(false) }
     Column {
-        EditorParticipantes(vm)
+        TextButton(onClick = { editarPersonas = !editarPersonas }) {
+            Text(if (editarPersonas) "Listo" else "${vm.participantes.size} personas · agregar o quitar")
+        }
+        if (editarPersonas) EditorParticipantes(vm)
         Text(
             "Marca quién consumió cada ítem. Si no marcas a nadie, se reparte entre todos. " +
                 "En ítems con varias unidades puedes ajustar cuántas tomó cada uno.",
@@ -456,6 +520,15 @@ private fun PantallaAsignar(vm: CuentaViewModel) {
                     }
                 }
             }
+        }
+        val sinMarcar = vm.items.count { vm.asignaciones[it.id].isNullOrEmpty() }
+        if (sinMarcar > 0) {
+            Text(
+                if (sinMarcar == 1) "1 ítem sin marcar: se reparte entre todos."
+                else "$sinMarcar ítems sin marcar: se reparten entre todos.",
+                style = MaterialTheme.typography.bodySmall, color = Boleta.Grafito,
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
         Button(
             onClick = { vm.pantalla = Pantalla.RESUMEN },
@@ -500,8 +573,10 @@ private fun SelectorUnidades(vm: CuentaViewModel, item: ItemEditable, elegidos: 
 @Composable
 private fun PantallaResumen(vm: CuentaViewModel) {
     val context = LocalContext.current
-    val reparto = vm.calcular()
-    var editandoDatos by rememberSaveable { mutableStateOf(false) }
+    // Se recalcula solo cuando cambia algo que afecta la cuenta, no en cada tecla del nombre de la cuenta
+    val reparto by remember { derivedStateOf { vm.calcular() } }
+    val transferencias by remember { derivedStateOf { reparto?.let(vm::transferencias).orEmpty() } }
+    var editandoDatosDe by rememberSaveable { mutableStateOf<String?>(null) }
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             if (vm.repartido) "Repartido: el total en partes iguales" else "Detallado: cada uno paga lo que consumió",
@@ -512,6 +587,7 @@ private fun PantallaResumen(vm: CuentaViewModel) {
             OutlinedTextField(
                 vm.propinaPct, { vm.propinaPct = it }, Modifier.width(120.dp),
                 label = { Text("Propina %") }, singleLine = true,
+                isError = vm.propinaPct.isNotBlank() && Precios.porcentaje(vm.propinaPct) == null,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
             Spacer(Modifier.width(12.dp))
@@ -524,6 +600,16 @@ private fun PantallaResumen(vm: CuentaViewModel) {
                 }
             }
         }
+        // Atajos para la propina más común en Chile (10 %) y las otras dos que más se usan
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("0", "10", "15").forEach { pct ->
+                FilterChip(
+                    selected = Precios.porcentaje(vm.propinaPct)?.compareTo(BigDecimal(pct)) == 0,
+                    onClick = { vm.propinaPct = pct },
+                    label = { Text(if (pct == "0") "Sin propina" else "$pct %") },
+                )
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Impuesto incluido en los precios", Modifier.weight(1f))
             Switch(checked = vm.impuestoIncluido, onCheckedChange = { vm.impuestoIncluido = it })
@@ -532,19 +618,21 @@ private fun PantallaResumen(vm: CuentaViewModel) {
             OutlinedTextField(
                 vm.impuestoPct, { vm.impuestoPct = it }, Modifier.width(120.dp),
                 label = { Text("Impuesto %") }, singleLine = true,
+                isError = vm.impuestoPct.isNotBlank() && Precios.porcentaje(vm.impuestoPct) == null,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             )
         }
         AjustesCuenta(vm)
         HorizontalDivider()
 
-        if (reparto == null) {
-            Text("Faltan participantes o hay ítems con precio inválido.")
+        val r = reparto
+        if (r == null) {
+            Text(vm.motivoSinCalculo() ?: "No se pudo calcular la cuenta.", color = MaterialTheme.colorScheme.error)
             return@Column
         }
-        reparto.values.forEach { TarjetaPersona(it, vm.conCentavos, conItems = !vm.repartido) }
+        r.values.forEach { TarjetaPersona(it, vm.conCentavos, conItems = !vm.repartido) }
 
-        val total = reparto.values.fold(BigDecimal.ZERO) { acc, d -> acc + d.total }
+        val total = r.values.fold(BigDecimal.ZERO) { acc, d -> acc + d.total }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Total a pagar", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
             Text(dinero(total, vm.conCentavos), style = EstiloMonto.copy(fontSize = 24.sp))
@@ -558,83 +646,74 @@ private fun PantallaResumen(vm: CuentaViewModel) {
                 FilterChip(selected = vm.pagador == p, onClick = { vm.pagador = p }, label = { Text(p) })
             }
         }
-        if (vm.boletasJuntada.isNotEmpty()) {
+        val enJuntada = vm.boletasJuntada.isNotEmpty()
+        if (enJuntada) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp)) {
                     Text("Juntada: ${vm.boletasJuntada.size + 1} boletas", fontWeight = FontWeight.SemiBold)
                     Text(
                         (vm.boletasJuntada.map { it.titulo } + "esta").joinToString(" + ") +
-                            " · total ${dinero(vm.totalJuntada(reparto), vm.conCentavos)}",
+                            " · total ${dinero(vm.totalJuntada(r), vm.conCentavos)}",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
-                        "Las transferencias de abajo saldan todas las boletas juntas.",
-                        style = MaterialTheme.typography.bodySmall, color = Boleta.Grafito,
+                        if (vm.pagador == null) "Elige quién pagó esta boleta para calcular las transferencias de toda la juntada."
+                        else "Las transferencias de abajo saldan todas las boletas juntas.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (vm.pagador == null) MaterialTheme.colorScheme.error else Boleta.Grafito,
                     )
                     TextButton(onClick = vm::cerrarJuntada) { Text("Cerrar juntada") }
                 }
             }
         }
-        val transferencias = vm.transferencias(reparto)
-        val datosPorAcreedor = transferencias.map { it.a }.distinct()
-            .mapNotNull { a -> vm.datosPagoDe(a)?.takeUnless { it.vacio }?.let { a to it } }.toMap()
-        val tituloMensaje = vm.tituloCuenta.ifBlank { "la cuenta" }
+        val datosPorAcreedor = vm.datosPorAcreedor(transferencias)
+        val tituloMensaje = if (enJuntada) "la juntada" else vm.tituloCuenta.ifBlank { "la cuenta" }
         transferencias.forEach { t ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("${t.de} le transfiere a ${t.a}", Modifier.weight(1f))
                 Text(dinero(t.monto, vm.conCentavos), style = EstiloMonto.copy(fontSize = 18.sp))
                 TextButton(onClick = {
+                    // Al cobrar, la cuenta queda guardada: así la deuda aparece en el historial para marcarla pagada
+                    vm.guardarEnHistorial(r, avisar = false)
                     enviarWhatsApp(context, Mensajes.cobro(t, tituloMensaje, datosPorAcreedor[t.a]) { dinero(it, vm.conCentavos) })
                 }) { Text("Cobrar") }
             }
         }
-        val quienPago = vm.pagador
-        val datosPago = quienPago?.let(vm::datosPagoDe)
-        if (quienPago != null) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Datos para depositar a $quienPago", fontWeight = FontWeight.SemiBold)
-                    if (datosPago == null || datosPago.vacio) {
-                        Text(
-                            "Agrégalos y saldrán en el PDF y en el mensaje. Quedan guardados para la próxima.",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    } else {
-                        datosPago.lineas().forEach { (etiqueta, valor) ->
-                            Row {
-                                Text(etiqueta, Modifier.width(120.dp), style = MaterialTheme.typography.bodySmall, color = Boleta.Grafito)
-                                Text(valor, style = EstiloMonto.copy(fontSize = 14.sp, color = Boleta.Tinta))
-                            }
-                        }
-                    }
-                    TextButton(onClick = { editandoDatos = true }) {
-                        Text(if (datosPago == null || datosPago.vacio) "Agregar datos bancarios" else "Editar datos")
-                    }
-                }
-            }
+        // Datos para depositar de cada persona que recibe plata (en una juntada pueden ser varias)
+        vm.acreedores(r).forEach { quien ->
+            TarjetaDatosPago(quien, vm.datosPagoDe(quien)) { editandoDatosDe = quien }
         }
 
         HorizontalDivider()
         OutlinedTextField(
             vm.tituloCuenta, { vm.tituloCuenta = it }, Modifier.fillMaxWidth(),
             label = { Text("Nombre de la cuenta (opcional)") }, singleLine = true,
+            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
         )
-        OutlinedButton(onClick = { vm.agregarOtraBoleta(reparto) }, Modifier.fillMaxWidth()) {
-            Text("Agregar otra boleta a esta juntada")
-        }
+        OutlinedButton(
+            onClick = { vm.agregarOtraBoleta(r) },
+            enabled = vm.pagador != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(if (vm.pagador == null) "Para agregar otra boleta, elige quién pagó esta" else "Agregar otra boleta a esta juntada") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { vm.guardarEnHistorial(reparto) }, Modifier.weight(1f)) {
+            OutlinedButton(onClick = { vm.guardarEnHistorial(r) }, Modifier.weight(1f)) {
                 Text("Guardar")
             }
             OutlinedButton(
-                onClick = { vm.exportarPdf(reparto) { compartirPdf(context, it) } },
+                onClick = {
+                    vm.guardarEnHistorial(r, avisar = false)
+                    vm.exportarPdf(r) { compartirPdf(context, it) }
+                },
+                enabled = vm.ocupado == null,
                 modifier = Modifier.weight(1f),
             ) { Text("PDF") }
             Button(
                 onClick = {
+                    vm.guardarEnHistorial(r, avisar = false)
                     val texto = resumenTexto(
-                        reparto, total, transferencias, vm.conCentavos,
+                        vm.tituloCuenta, r, total, transferencias, vm.conCentavos,
                         datosPorAcreedor = datosPorAcreedor, repartido = vm.repartido,
+                        boletasEnJuntada = vm.boletasJuntada.size + 1,
                     )
                     val envio = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, texto)
                     context.startActivity(Intent.createChooser(envio, "Compartir cuenta"))
@@ -645,17 +724,58 @@ private fun PantallaResumen(vm: CuentaViewModel) {
         Spacer(Modifier.height(16.dp))
     }
 
-    val quien = vm.pagador
-    if (editandoDatos && quien != null) {
+    editandoDatosDe?.let { quien ->
         DialogoDatosPago(
             persona = quien,
             inicial = vm.datosPagoDe(quien) ?: DatosPago(titular = quien),
-            alCerrar = { editandoDatos = false },
-            alGuardar = { vm.guardarDatosPago(quien, it); editandoDatos = false },
+            alCerrar = { editandoDatosDe = null },
+            alGuardar = { vm.guardarDatosPago(quien, it); editandoDatosDe = null },
         )
     }
 }
 
+/** Los datos bancarios de [persona], con botones para copiarlos y editarlos. */
+@Composable
+private fun TarjetaDatosPago(persona: String, datos: DatosPago?, alEditar: () -> Unit) {
+    val portapapeles = LocalClipboardManager.current
+    val vacio = datos == null || datos.vacio
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Datos para depositar a $persona", fontWeight = FontWeight.SemiBold)
+            if (datos == null || vacio) {
+                Text(
+                    "Agrégalos y saldrán en el PDF y en el mensaje. Quedan guardados para la próxima.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            } else {
+                datos.lineas().forEach { (etiqueta, valor) ->
+                    Row {
+                        Text(etiqueta, Modifier.width(120.dp), style = MaterialTheme.typography.bodySmall, color = Boleta.Grafito)
+                        Text(valor, style = EstiloMonto.copy(fontSize = 14.sp, color = Boleta.Tinta))
+                    }
+                }
+            }
+            Row {
+                TextButton(onClick = alEditar) { Text(if (vacio) "Agregar datos bancarios" else "Editar datos") }
+                if (datos != null && !vacio) {
+                    TextButton(onClick = {
+                        portapapeles.setText(AnnotatedString(datos.lineas().joinToString("\n") { (k, v) -> "$k: $v" }))
+                    }) { Text("Copiar") }
+                }
+            }
+        }
+    }
+}
+
+/** Etiqueta corta del botón -> cómo queda escrito en los datos. */
+private val TIPOS_DE_CUENTA = listOf(
+    "Corriente" to "Cuenta corriente",
+    "Vista" to "Cuenta vista",
+    "RUT" to "Cuenta RUT",
+    "Ahorro" to "Cuenta de ahorro",
+)
+
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DialogoDatosPago(
     persona: String,
@@ -664,29 +784,58 @@ private fun DialogoDatosPago(
     alGuardar: (DatosPago) -> Unit,
 ) {
     var datos by remember { mutableStateOf(inicial) }
+    val rutMalo = datos.rut.isNotBlank() && !Rut.esValido(datos.rut)
+    val correoMalo = datos.correo.isNotBlank() && !datos.correo.trim().matches(Regex("""[^@\s]+@[^@\s]+\.[^@\s]+"""))
     AlertDialog(
         onDismissRequest = alCerrar,
         title = { Text("Datos para depositar a $persona") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedTextField(datos.titular, { datos = datos.copy(titular = it) }, label = { Text("Nombre del titular") }, singleLine = true)
-                OutlinedTextField(datos.rut, { datos = datos.copy(rut = it) }, label = { Text("RUT") }, singleLine = true)
-                OutlinedTextField(datos.banco, { datos = datos.copy(banco = it) }, label = { Text("Banco") }, singleLine = true)
+                OutlinedTextField(
+                    datos.titular, { datos = datos.copy(titular = it) }, label = { Text("Nombre del titular") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                )
+                OutlinedTextField(
+                    datos.rut, { datos = datos.copy(rut = it) }, label = { Text("RUT") }, singleLine = true,
+                    isError = rutMalo,
+                    supportingText = if (rutMalo) ({ Text("El dígito verificador no calza; revísalo.") }) else null,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                )
+                OutlinedTextField(
+                    datos.banco, { datos = datos.copy(banco = it) }, label = { Text("Banco") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                )
                 OutlinedTextField(
                     datos.tipoCuenta, { datos = datos.copy(tipoCuenta = it) },
-                    label = { Text("Tipo de cuenta (corriente, vista, RUT)") }, singleLine = true,
+                    label = { Text("Tipo de cuenta") }, singleLine = true,
                 )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TIPOS_DE_CUENTA.forEach { (etiqueta, tipo) ->
+                        FilterChip(
+                            selected = datos.tipoCuenta.equals(tipo, ignoreCase = true),
+                            onClick = { datos = datos.copy(tipoCuenta = tipo) },
+                            label = { Text(etiqueta) },
+                        )
+                    }
+                }
                 OutlinedTextField(
                     datos.numero, { datos = datos.copy(numero = it) }, label = { Text("Número de cuenta") }, singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
                 OutlinedTextField(
                     datos.correo, { datos = datos.copy(correo = it) }, label = { Text("Correo") }, singleLine = true,
+                    isError = correoMalo,
+                    supportingText = if (correoMalo) ({ Text("Parece que al correo le falta algo.") }) else null,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { alGuardar(datos) }) { Text("Guardar") } },
+        // Se puede guardar igual (el aviso es para revisar); el RUT válido queda con puntos y guion
+        confirmButton = {
+            TextButton(onClick = { alGuardar(datos.copy(rut = Rut.formatear(datos.rut), correo = datos.correo.trim())) }) {
+                Text("Guardar")
+            }
+        },
         dismissButton = { TextButton(onClick = alCerrar) { Text("Cancelar") } },
     )
 }
@@ -703,6 +852,9 @@ private fun PantallaHistorial(vm: CuentaViewModel) {
     val importar = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::importarRespaldo)
     }
+    // Borrar no se puede deshacer: se pregunta antes
+    var cuentaPorBorrar by remember { mutableStateOf<CuentaGuardada?>(null) }
+    var grupoPorBorrar by remember { mutableStateOf<String?>(null) }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -745,7 +897,7 @@ private fun PantallaHistorial(vm: CuentaViewModel) {
                         }
                         Text(dinero(total, c.conCentavos), style = EstiloMonto)
                         TextButton(
-                            onClick = { vm.borrarDelHistorial(c.creada) },
+                            onClick = { cuentaPorBorrar = c },
                             modifier = Modifier.semantics { contentDescription = "Borrar ${c.titulo}" },
                         ) { Text("✕") }
                     }
@@ -792,13 +944,48 @@ private fun PantallaHistorial(vm: CuentaViewModel) {
                         Text(g.miembros.joinToString(", "), style = MaterialTheme.typography.bodySmall)
                     }
                     TextButton(
-                        onClick = { vm.borrarGrupo(g.nombre) },
+                        onClick = { grupoPorBorrar = g.nombre },
                         modifier = Modifier.semantics { contentDescription = "Borrar grupo ${g.nombre}" },
                     ) { Text("✕") }
                 }
             }
         }
     }
+
+    cuentaPorBorrar?.let { c ->
+        val pendientes = c.pendientes().size
+        Confirmar(
+            titulo = "¿Borrar \"${c.titulo}\"?",
+            detalle = when (pendientes) {
+                0 -> "No se puede deshacer."
+                1 -> "Todavía hay 1 transferencia por cobrar en esta cuenta."
+                else -> "Todavía hay $pendientes transferencias por cobrar en esta cuenta."
+            },
+            alConfirmar = { vm.borrarDelHistorial(c.creada) },
+            alCerrar = { cuentaPorBorrar = null },
+        )
+    }
+    grupoPorBorrar?.let { nombre ->
+        Confirmar(
+            titulo = "¿Borrar el grupo \"$nombre\"?",
+            detalle = "Las cuentas guardadas no cambian.",
+            alConfirmar = { vm.borrarGrupo(nombre) },
+            alCerrar = { grupoPorBorrar = null },
+        )
+    }
+}
+
+@Composable
+private fun Confirmar(titulo: String, detalle: String, alConfirmar: () -> Unit, alCerrar: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = alCerrar,
+        title = { Text(titulo) },
+        text = { Text(detalle) },
+        confirmButton = {
+            TextButton(onClick = { alConfirmar(); alCerrar() }) { Text("Borrar", color = MaterialTheme.colorScheme.error) }
+        },
+        dismissButton = { TextButton(onClick = alCerrar) { Text("Cancelar") } },
+    )
 }
 
 @Composable
@@ -840,13 +1027,16 @@ private fun compartirPdf(context: Context, archivo: File) {
 }
 
 private fun resumenTexto(
+    titulo: String,
     reparto: Map<String, Detalle>,
     total: BigDecimal,
     transferencias: List<Transferencia>,
     centavos: Boolean,
     datosPorAcreedor: Map<String, DatosPago>,
     repartido: Boolean,
+    boletasEnJuntada: Int,
 ) = buildString {
+    if (titulo.isNotBlank()) appendLine(titulo.trim())
     appendLine(if (repartido) "Cuenta repartida en partes iguales:" else "Cuenta dividida:")
     reparto.values.forEach {
         appendLine(if (it.invitado) "• ${it.nombre}: invitado" else "• ${it.nombre}: ${dinero(it.total, centavos)}")
@@ -855,7 +1045,10 @@ private fun resumenTexto(
     if (transferencias.isNotEmpty()) {
         appendLine()
         appendLine()
-        appendLine("Transferencias:")
+        appendLine(
+            if (boletasEnJuntada > 1) "Transferencias (saldan las $boletasEnJuntada boletas de la juntada):"
+            else "Transferencias:",
+        )
         transferencias.forEach { appendLine("• ${it.de} → ${it.a}: ${dinero(it.monto, centavos)}") }
     }
     datosPorAcreedor.forEach { (persona, datos) ->
@@ -889,6 +1082,7 @@ private fun AjustesCuenta(vm: CuentaViewModel) {
         OutlinedTextField(
             vm.descuento, { vm.descuento = it }, Modifier.fillMaxWidth(),
             label = { Text("Descuento o cupón ($)") }, singleLine = true,
+            isError = vm.descuento.isNotBlank() && Precios.parsear(vm.descuento) == null,
             supportingText = { Text("Se resta antes de la propina, en proporción a lo que consumió cada uno.") },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         )

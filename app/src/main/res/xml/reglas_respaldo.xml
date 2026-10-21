@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Respaldo automático de Android (cuenta de Google): el modelo de Gemma pesa
+  varios GB y el respaldo en la nube tiene un límite de 25 MB; si se incluye,
+  Android no respalda nada y se pierde el historial. Se deja fuera el modelo
+  (se vuelve a importar) para que sí se respalden historial, grupos y datos.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="modelos/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="modelos/" />
+    </device-transfer>
+</data-extraction-rules>

@@ -108,9 +108,28 @@ object Historial {
             ?.let { runCatching { json.decodeFromString<ArchivoHistorial>(it) }.getOrNull() }
             ?: ArchivoHistorial()
 
-    /** Agrega la cuenta al comienzo (la más reciente primero) y conserva las últimas [MAX_CUENTAS]. */
+    /** Agrega la cuenta al comienzo (la más reciente primero) y conserva a lo más [MAX_CUENTAS]. */
     fun agregarCuenta(archivo: ArchivoHistorial, cuenta: CuentaGuardada): ArchivoHistorial =
-        archivo.copy(cuentas = (listOf(cuenta) + archivo.cuentas.filter { it.creada != cuenta.creada }).take(MAX_CUENTAS))
+        archivo.copy(cuentas = recortar(listOf(cuenta) + archivo.cuentas.filter { it.creada != cuenta.creada }))
+
+    /**
+     * Deja a lo más [MAX_CUENTAS] cuentas (vienen de la más reciente a la más
+     * antigua). Primero se van las más antiguas que ya no tienen nada por cobrar,
+     * para no perder una deuda pendiente por llegar al límite.
+     */
+    private fun recortar(cuentas: List<CuentaGuardada>): List<CuentaGuardada> {
+        var sobran = cuentas.size - MAX_CUENTAS
+        if (sobran <= 0) return cuentas
+        val fuera = mutableSetOf<Long>()
+        for (c in cuentas.asReversed()) {
+            if (sobran == 0) break
+            if (c.pendientes().isEmpty()) {
+                fuera += c.creada
+                sobran--
+            }
+        }
+        return cuentas.filter { it.creada !in fuera }.take(MAX_CUENTAS)
+    }
 
     fun borrarCuenta(archivo: ArchivoHistorial, creada: Long): ArchivoHistorial =
         archivo.copy(cuentas = archivo.cuentas.filter { it.creada != creada })
@@ -140,7 +159,7 @@ object Historial {
      */
     fun combinar(actual: ArchivoHistorial, respaldo: ArchivoHistorial): ArchivoHistorial {
         val porId = (actual.cuentas + respaldo.cuentas).associateBy { it.creada }
-        var r = actual.copy(cuentas = porId.values.sortedByDescending { it.creada }.take(MAX_CUENTAS))
+        var r = actual.copy(cuentas = recortar(porId.values.sortedByDescending { it.creada }))
         respaldo.grupos.filter { g -> actual.grupos.none { it.nombre.equals(g.nombre, ignoreCase = true) } }
             .forEach { r = guardarGrupo(r, it) }
         respaldo.datosPago.filter { (p, _) -> datosPagoDe(actual, p) == null }

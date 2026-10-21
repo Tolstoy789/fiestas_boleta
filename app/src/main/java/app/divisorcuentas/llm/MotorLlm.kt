@@ -30,15 +30,20 @@ interface MotorLlm {
     fun cerrar() {}
 }
 
+/** Ítems leídos y si salieron del modelo (false = el modelo falló y se usó el respaldo por texto). */
+data class Extraccion(val items: List<Item>, val delModelo: Boolean)
+
 /**
  * Pide a [motor] los ítems de la boleta. Si el motor entiende imágenes y hay foto,
  * se la manda junto al texto del OCR. Si el modelo falla, usa el respaldo por texto.
  */
-suspend fun extraerItems(motor: MotorLlm, textoBoleta: String, foto: Bitmap? = null): List<Item> {
+suspend fun extraerItems(motor: MotorLlm, textoBoleta: String, foto: Bitmap? = null): Extraccion {
     val conFoto = foto != null && motor.entiendeImagenes
     val prompt = if (conFoto) ExtraccionItems.promptConImagen(textoBoleta) else ExtraccionItems.prompt(textoBoleta)
     val respuesta = runCatching { motor.generar(prompt, foto.takeIf { conFoto }) }.getOrNull()
-    return ExtraccionItems.extraer(respuesta, textoBoleta)
+    val delModelo = respuesta?.let(ExtraccionItems::desdeJson).orEmpty()
+    return if (delModelo.isNotEmpty()) Extraccion(delModelo, true)
+    else Extraccion(ExtraccionItems.desdeTexto(textoBoleta), false)
 }
 
 /**

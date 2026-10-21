@@ -7,7 +7,9 @@ import app.divisorcuentas.core.LineaOcr
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 
 /**
  * Extrae el texto de la foto de una boleta con ML Kit, en el teléfono y sin internet.
@@ -24,7 +26,8 @@ class OcrBoleta(private val context: Context) {
      * @return Texto en crudo, una fila de la boleta por línea (ítem y precio juntos).
      */
     suspend fun extraerTexto(imagen: Uri): String {
-        val entrada = InputImage.fromFilePath(context, imagen) // respeta la rotación EXIF
+        // Decodificar la foto (12 MP o más) toma tiempo: fuera del hilo de la pantalla
+        val entrada = withContext(Dispatchers.IO) { InputImage.fromFilePath(context, imagen) } // respeta la rotación EXIF
         val resultado = reconocedor.process(entrada).await()
 
         val lineas = resultado.textBlocks
