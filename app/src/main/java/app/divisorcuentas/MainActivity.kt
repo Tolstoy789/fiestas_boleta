@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -31,7 +33,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             TemaBoleta {
                 var intro by rememberSaveable { mutableStateOf(!volviendo) }
-                if (intro) IntroBoleta(alTerminar = { intro = false }) else AppDivisor(vm)
+                // La animación se funde con la primera pantalla en vez de cortarse de golpe
+                Crossfade(intro, animationSpec = tween(450), label = "inicio") { mostrar ->
+                    if (mostrar) IntroBoleta(alTerminar = { intro = false }) else AppDivisor(vm)
+                }
             }
         }
     }
