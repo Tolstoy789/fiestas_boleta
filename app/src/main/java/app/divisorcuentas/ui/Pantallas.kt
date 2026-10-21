@@ -331,9 +331,13 @@ private fun PantallaBoleta(vm: CuentaViewModel) {
     val modelo = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::importarModelo)
     }
+    // Boletas que llegan después del evento: una imagen o un PDF en Descargas, Drive, WhatsApp…
+    val buscarArchivo = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(vm::procesarArchivo)
+    }
 
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Saca una foto a la boleta con buena luz, recta y completa.")
+        Text("Saca una foto a la boleta con buena luz, recta y completa, o busca la imagen si te la mandaron después.")
 
         val ocupado = vm.ocupado
         if (ocupado != null) {
@@ -356,6 +360,15 @@ private fun PantallaBoleta(vm: CuentaViewModel) {
                 onClick = { galeria.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                 Modifier.fillMaxWidth(),
             ) { Text("Elegir de la galería") }
+            OutlinedButton(
+                onClick = { buscarArchivo.launch(arrayOf("image/*", "application/pdf")) },
+                Modifier.fillMaxWidth(),
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Buscar imagen o PDF")
+                    Text("En Descargas, Drive, correo o WhatsApp", style = MaterialTheme.typography.bodySmall)
+                }
+            }
             TextButton(onClick = vm::empezarSinFoto) { Text("Ingresar ítems a mano") }
             val guardadas = vm.historial.cuentas.size
             if (guardadas > 0) {

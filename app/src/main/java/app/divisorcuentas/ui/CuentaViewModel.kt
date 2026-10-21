@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.divisorcuentas.core.Ajustes
@@ -37,6 +38,7 @@ import app.divisorcuentas.llm.MotorMock
 import app.divisorcuentas.llm.extraerItems
 import app.divisorcuentas.ocr.OcrBoleta
 import app.divisorcuentas.ocr.cargarFotoReducida
+import app.divisorcuentas.ocr.pdfAImagen
 import app.divisorcuentas.pdf.DatosPdf
 import app.divisorcuentas.pdf.DetallePdf
 import java.io.File
@@ -166,7 +168,23 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Boleta ----
 
-    fun procesarFoto(uri: Uri) = trabajar("Leyendo la boleta…") {
+    fun procesarFoto(uri: Uri) = trabajar("Leyendo la boleta…") { leerBoleta(uri) }
+
+    /**
+     * Una boleta que llegó después del evento (por correo, WhatsApp o Drive): una imagen
+     * o un PDF. Del PDF se lee la primera página.
+     */
+    fun procesarArchivo(uri: Uri) {
+        val app = getApplication<Application>()
+        if (app.contentResolver.getType(uri) != "application/pdf") return procesarFoto(uri)
+        trabajar("Abriendo el PDF…") {
+            val imagen = pdfAImagen(app, uri)
+            ocupado = "Leyendo la boleta…"
+            leerBoleta(FileProvider.getUriForFile(app, "${app.packageName}.archivos", imagen))
+        }
+    }
+
+    private suspend fun leerBoleta(uri: Uri) {
         textoOcr = ocr.extraerTexto(uri)
         if (textoOcr.isBlank()) {
             throw IllegalStateException("No se encontró texto en la foto. Prueba con más luz y la boleta recta.")
