@@ -112,7 +112,7 @@ private fun DrawScope.dibujarTicket(p: Float) {
                 translate(left = -22 * u * separa) { mitadTicket(u, mitad, alto, derecha = false) }
             }
             rotate(3f * separa, pivot = Offset(mitad, 0f)) {
-                translate(left = 22 * u * separa) { mitadTicket(u, mitad, alto, derecha = true) }
+                translate(left = mitad + 22 * u * separa) { mitadTicket(u, mitad, alto, derecha = true) }
             }
             // Línea de corte punteada
             val largo = (alto + 12 * u) * corte
