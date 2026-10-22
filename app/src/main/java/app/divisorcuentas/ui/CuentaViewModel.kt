@@ -32,10 +32,10 @@ import app.divisorcuentas.core.boleta
 import app.divisorcuentas.core.guardada
 import app.divisorcuentas.historial.RepositorioHistorial
 import app.divisorcuentas.llm.ModeloLocal
-import app.divisorcuentas.llm.MotorAiEdge
 import app.divisorcuentas.llm.MotorLlm
 import app.divisorcuentas.llm.MotorMock
 import app.divisorcuentas.llm.extraerItems
+import app.divisorcuentas.llm.motorPara
 import app.divisorcuentas.ocr.OcrBoleta
 import app.divisorcuentas.ocr.cargarFotoReducida
 import app.divisorcuentas.ocr.pdfAImagen
@@ -151,7 +151,7 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun elegirMotor(gemma: Boolean) {
         if (gemma && archivoModelo == null) {
-            error = "Primero importa el archivo .task de Gemma."
+            error = "Primero importa el modelo de Gemma."
             return
         }
         usarGemma = gemma
@@ -169,7 +169,7 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         motorGemma?.let { return it }
         ocupado = "Cargando Gemma (la primera vez tarda un poco)…"
         val archivo = requireNotNull(archivoModelo)
-        return withContext(Dispatchers.Default) { MotorAiEdge(getApplication(), archivo) }.also { motorGemma = it }
+        return withContext(Dispatchers.Default) { motorPara(getApplication(), archivo) }.also { motorGemma = it }
     }
 
     // ---- Boleta ----

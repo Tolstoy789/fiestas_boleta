@@ -30,6 +30,11 @@ interface MotorLlm {
     fun cerrar() {}
 }
 
+/** El motor que sabe abrir [archivo]: LiteRT-LM para `.litertlm` (Gemma 4) y AI Edge para `.task` (Gemma 3n). */
+fun motorPara(context: Context, archivo: File): MotorLlm =
+    if (archivo.extension.equals("litertlm", ignoreCase = true)) MotorLiteRtLm(archivo)
+    else MotorAiEdge(context, archivo)
+
 /** Ítems leídos y si salieron del modelo (false = el modelo falló y se usó el respaldo por texto). */
 data class Extraccion(val items: List<Item>, val delModelo: Boolean)
 
@@ -64,9 +69,9 @@ class MotorMock : MotorLlm {
 /**
  * Gemma en el teléfono con Google AI Edge (MediaPipe LLM Inference).
  *
- * Usa el mismo archivo de modelo que AI Edge Gallery (`.task`), por ejemplo
- * `gemma-3n-E2B-it-int4.task` de huggingface.co/google. El archivo se copia a la
- * carpeta privada de la app con [ModeloLocal.importar].
+ * Lee los modelos `.task`, por ejemplo `gemma-3n-E2B-it-int4.task` de
+ * huggingface.co/google (los `.litertlm` van con [MotorLiteRtLm]). El archivo se
+ * copia a la carpeta privada de la app con [ModeloLocal.importar].
  *
  * Se intenta cargar con visión (Gemma 3n puede leer la foto) y en la GPU del
  * S25 Ultra; si el modelo no trae visión o la GPU falla, se cae a texto y a CPU.

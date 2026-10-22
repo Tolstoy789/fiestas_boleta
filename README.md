@@ -43,12 +43,13 @@ Papel y tinta, letra de máquina para los montos y un solo acento verde para el 
 | `core/.../Borrador.kt` | La cuenta en curso, para seguir donde se quedó si Android cierra la app. |
 | `core/.../Rut.kt` | Revisa el dígito verificador del RUT y lo escribe como 12.345.678-5. |
 | `app/.../ocr/OcrBoleta.kt` | OCR con ML Kit. |
-| `app/.../llm/MotorLlm.kt` | Interfaz `MotorLlm` con dos motores: `MotorMock` (sin modelo) y `MotorAiEdge` (Gemma). |
+| `app/.../llm/MotorLlm.kt` | Interfaz `MotorLlm`, `MotorMock` (sin modelo) y `MotorAiEdge` (Gemma `.task`). |
+| `app/.../llm/MotorLiteRtLm.kt` | Gemma `.litertlm` (Gemma 4) con LiteRT-LM. |
 | `app/.../llm/ModeloLocal.kt` | Copia el archivo del modelo dentro de la app. |
 | `app/.../ui/` | Estado (`CuentaViewModel`) y las cuatro pantallas en Jetpack Compose. |
 
-Para conectar otro motor (otro SDK de AI Edge, LiteRT-LM, un servidor local), implementa
-`MotorLlm.generar(prompt)` y devuélvelo en `CuentaViewModel.motor()`.
+Para conectar otro motor (otro SDK, un servidor local), implementa `MotorLlm.generar(prompt)`
+y elígelo en `motorPara()`, en `MotorLlm.kt`.
 
 ## Reglas del reparto
 
@@ -80,13 +81,18 @@ Sin modelo la app ya funciona en modo de prueba (lee los ítems sin IA).
 ## Conectar Gemma
 
 AI Edge Gallery guarda sus modelos en una carpeta privada que otras apps no pueden leer,
-así que hay que descargar el archivo `.task` aparte:
+así que hay que descargar el modelo aparte. La app lee dos formatos:
 
-1. En el teléfono, descarga un modelo Gemma en formato `.task` desde Hugging Face
-   (por ejemplo `gemma-3n-E2B-it-int4.task`, de la página de Google `gemma-3n-E2B-it-litert-preview`;
-   hay que aceptar la licencia de Gemma con tu cuenta).
-2. En la app, pantalla 1, toca **Importar modelo .task** y elige el archivo. Se copia una sola vez.
-3. Activa **Usar Gemma (AI Edge)**. La primera carga del modelo tarda unos segundos; se intenta usar la GPU
+- **`.litertlm` (recomendado):** Gemma 4, con LiteRT-LM. Por ejemplo `gemma-4-E4B-it.litertlm` (3,7 GB),
+  de la página `litert-community/gemma-4-E4B-it-litert-lm` en Hugging Face; no pide aceptar licencia.
+  `gemma-4-E2B-it.litertlm` (2,6 GB) es más liviano y rápido, pero lee con menos precisión.
+- **`.task`:** Gemma 3n, con MediaPipe LLM Inference. Por ejemplo `gemma-3n-E2B-it-int4.task`, de la
+  página de Google `gemma-3n-E2B-it-litert-preview`; hay que aceptar la licencia de Gemma con tu cuenta.
+
+1. En el teléfono, descarga el archivo desde Hugging Face.
+2. En la app, en **La boleta**, toca **Importar modelo** y elige el archivo. Se copia una sola vez;
+   **Cambiar** lo reemplaza por otro.
+3. Activa **Ordenar con Gemma**. La primera carga del modelo tarda unos segundos; se intenta usar la GPU
    y, si no se puede, la CPU.
 
 ## Pruebas

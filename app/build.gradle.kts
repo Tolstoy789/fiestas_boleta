@@ -25,11 +25,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // LiteRT-LM viene compilada con Kotlin 2.4; igual que AI Edge Gallery, se lee sin exigir la misma versión
+        freeCompilerArgs.add("-Xskip-metadata-version-check")
     }
 }
 
@@ -48,7 +53,9 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 
-    // Gemma en el teléfono con Google AI Edge (MediaPipe LLM Inference)
+    // Gemma en el teléfono con Google AI Edge: LiteRT-LM lee los .litertlm (Gemma 4)
+    // y MediaPipe LLM Inference los .task (Gemma 3n)
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.0")
     implementation("com.google.mediapipe:tasks-genai:0.10.24")
     // MPImage/BitmapImageBuilder (para mandar la foto a Gemma) vienen en tasks-core, que trae tasks-vision
     implementation("com.google.mediapipe:tasks-vision:0.10.+") // 0.10.24 no existe para vision; toma la 0.10 más reciente

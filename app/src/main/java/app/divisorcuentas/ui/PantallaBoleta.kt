@@ -223,7 +223,7 @@ private fun TarjetaGemma(vm: CuentaViewModel, importar: () -> Unit) {
                     "Gemma mira la foto",
                     vm.gemmaLeeFoto,
                     { vm.gemmaLeeFoto = it },
-                    detalle = "Con Gemma 3n lee la boleta directo, además del texto. Más lento, pero acierta más.",
+                    detalle = "Con Gemma 4 o 3n lee la boleta directo, además del texto. Más lento, pero acierta más.",
                     habilitado = libre,
                 )
             }
@@ -248,7 +248,7 @@ private fun TarjetaGemma(vm: CuentaViewModel, importar: () -> Unit) {
             }
             Spacer(Modifier.width(8.dp))
             BotonSecundario(
-                if (archivo == null) "Importar .task" else "Cambiar",
+                if (archivo == null) "Importar modelo" else "Cambiar",
                 importar,
                 habilitado = libre,
                 alto = 40.dp,
