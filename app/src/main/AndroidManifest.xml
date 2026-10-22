@@ -11,9 +11,10 @@
         android:largeHeap="true"
         android:theme="@style/Theme.Divisor.Arranque">
 
-        <!-- La librería de AI Edge usa OpenCL para la GPU -->
+        <!-- Las librerías de AI Edge usan OpenCL para la GPU (LiteRT-LM pide además libvndksupport) -->
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
 
         <!-- Para que la cámara guarde la foto de la boleta -->
         <provider

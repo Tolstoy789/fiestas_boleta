@@ -12,8 +12,8 @@ import java.util.Locale
  * Guarda el archivo del modelo dentro de la app.
  *
  * AI Edge Gallery guarda sus modelos en su propia carpeta privada, así que otra
- * app no puede leerlos. El usuario elige el `.task` descargado (por ejemplo en
- * Descargas) y se copia una sola vez a `filesDir/modelos/`.
+ * app no puede leerlos. El usuario elige el `.litertlm` o `.task` descargado (por
+ * ejemplo en Descargas) y se copia una sola vez a `filesDir/modelos/`.
  */
 object ModeloLocal {
 
@@ -37,7 +37,7 @@ object ModeloLocal {
         val (nombreLeido, tamano) = info(context, uri)
         val nombre = nombreLeido ?: "modelo.task"
         require(nombre.substringAfterLast('.', "").lowercase() in EXTENSIONES) {
-            "\"$nombre\" no es un modelo. Elige el archivo .task de Gemma (por ejemplo gemma-3n-E2B-it-int4.task)."
+            "\"$nombre\" no es un modelo. Elige el archivo .litertlm o .task de Gemma (por ejemplo gemma-4-E4B-it.litertlm)."
         }
         val carpeta = carpeta(context)
         if (tamano != null && carpeta.usableSpace < tamano + RESERVA) {
