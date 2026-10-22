@@ -70,6 +70,9 @@ data class ItemEditable(
     val unidades: Int get() = cantidad.toIntOrNull()?.takeIf { it > 0 } ?: 1
 }
 
+/** Un ítem o una persona recién borrados, con lo necesario para devolverlos. */
+class Borrado(val mensaje: String, val deshacer: () -> Unit)
+
 /**
  * Estado de toda la app: foto -> texto (OCR) -> ítems (Gemma) -> asignación -> totales,
  * más el historial de cuentas y los grupos de amigos.
@@ -85,6 +88,9 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var error by mutableStateOf<String?>(null)
     var aviso by mutableStateOf<String?>(null)
+    /** Lo último que se borró, mientras se ofrece deshacerlo. */
+    var borrado by mutableStateOf<Borrado?>(null)
+        private set
     var textoOcr by mutableStateOf("")
         private set
 
@@ -236,8 +242,14 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun borrarItem(id: Long) {
-        items.removeAll { it.id == id }
-        asignaciones.remove(id)
+        val i = items.indexOfFirst { it.id == id }
+        if (i < 0) return
+        val item = items.removeAt(i)
+        val partes = asignaciones.remove(id)
+        borrado = Borrado("Borraste ${item.nombre.ifBlank { "un ítem" }}") {
+            items.add(i.coerceAtMost(items.size), item)
+            partes?.let { asignaciones[id] = it }
+        }
     }
 
     /**
@@ -260,10 +272,35 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun borrarParticipante(nombre: String) {
-        participantes.remove(nombre)
+        val i = participantes.indexOf(nombre)
+        if (i < 0) return
+        // Lo necesario para devolverla tal como estaba: sus marcas, si era invitada, si pagó
+        val eraInvitado = nombre in invitados
+        val sinPonerPropina = nombre in sinPropina
+        val pago = pagador == nombre
+        val unidades = asignaciones.mapNotNull { (id, partes) -> partes[nombre]?.let { id to it } }
+        participantes.removeAt(i)
         invitados.remove(nombre); sinPropina.remove(nombre)
         asignaciones.keys.toList().forEach { id -> asignaciones[id] = asignaciones.getValue(id) - nombre }
-        if (pagador == nombre) pagador = null
+        if (pago) pagador = null
+        borrado = Borrado("Quitaste a $nombre") {
+            if (participantes.any { it.equals(nombre, ignoreCase = true) }) return@Borrado
+            participantes.add(i.coerceAtMost(participantes.size), nombre)
+            if (eraInvitado) invitados.add(nombre)
+            if (sinPonerPropina) sinPropina.add(nombre)
+            if (pago && pagador == null) pagador = nombre
+            unidades.forEach { (id, u) -> asignaciones[id]?.let { asignaciones[id] = it + (nombre to u) } }
+        }
+    }
+
+    /** Deshace el último borrado (un ítem o una persona). */
+    fun deshacerBorrado() {
+        borrado?.deshacer?.invoke()
+        borrado = null
+    }
+
+    fun olvidarBorrado() {
+        borrado = null
     }
 
     fun usarGrupo(grupo: Grupo) = grupo.miembros
@@ -284,6 +321,11 @@ class CuentaViewModel(app: Application) : AndroidViewModel(app) {
     fun alternar(itemId: Long, persona: String) {
         val actual = asignaciones[itemId].orEmpty()
         asignaciones[itemId] = if (persona in actual) actual - persona else actual + (persona to 1)
+    }
+
+    /** Vuelve el ítem a "entre todos": nadie marcado. */
+    fun repartirEntreTodos(itemId: Long) {
+        asignaciones.remove(itemId)
     }
 
     /** Suma o resta unidades a [persona] en un ítem con varias unidades (mínimo 1). */
